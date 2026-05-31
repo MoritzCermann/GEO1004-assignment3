@@ -1,9 +1,9 @@
 /*
 +------------------------------------------------------------------------------+
 |                                                                              |
-|                                 Hugo Ledoux                                  |
-|                             h.ledoux@tudelft.nl                              |
-|                                  2026-05-10                                  |
+|                   Ruben Vons | Moritz Cermann | Artemi Kurski                |
+|                                                                              |
+|                                  2026-05-31                                  |
 |                                                                              |
 +------------------------------------------------------------------------------+
 */
@@ -22,6 +22,7 @@
 #include <CGAL/Dimension.h>
 #include <vector>
 #include "json.hpp" // nlohmann::json
+#include "structs.h" // defines our custom data structures
 
 using json = nlohmann::json;
 
@@ -39,10 +40,17 @@ typedef K::Triangle_3               Triangle;
 typedef K::Vector_3                 Vector_3;
 
 // Constrained Delaunay triangulation type
+
 typedef CGAL::Constrained_triangulation_2<K> CDT;
 
 
-// empty array of arrays to store 3d points
+
+std::map<std::string, Object> objects;
+
+
+// -------------------------------------------------
+//
+// -------------------------------------------------
 std::vector<Point_3> vertices;
 
 int   get_no_roof_surfaces(const json& j);

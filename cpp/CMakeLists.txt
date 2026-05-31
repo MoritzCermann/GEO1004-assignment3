@@ -24,7 +24,8 @@ endif()
 find_package(Eigen3 REQUIRED)
 include(CGAL_Eigen3_support)
 
-add_executable(assignment3 src/main.cpp)
+add_executable(assignment3 src/main.cpp
+        include/structs.h)
 
 target_compile_options(assignment3 PRIVATE -Wall)
 
