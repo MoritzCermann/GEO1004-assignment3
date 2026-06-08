@@ -12,6 +12,7 @@ typedef CGAL::Simple_cartesian<FT> K;
 typedef K::Point_3 Point_3;
 typedef K::Triangle_3 Triangle;
 
+
 struct Shell {
     std::vector<Triangle> triangles;
 };
@@ -147,7 +148,22 @@ int main() {
             return voxels[x + y*max_x + z*max_x*max_y];
         }
     };
+    // max bounding box
+    CGAL::Bbox_3 bbox = CGAL::bbox_3(vertices.begin(), vertices.end());
+    double min_x = bbox.xmin();
+    double min_y = bbox.ymin();
+    double min_z = bbox.zmin();
+    double max_x = bbox.xmax();
+    double max_y = bbox.ymax();
+    double max_z = bbox.zmax();
 
+    // rows, columns, height
+    double n = 0.5;
+    unsigned int rows_x = (unsigned int)std::ceil((max_x - min_x) / n) + 2;
+    unsigned int rows_y = (unsigned int)std::ceil((max_y - min_y) / n) + 2;
+    unsigned int rows_z = (unsigned int)std::ceil((max_z - min_z) / n) + 2;
+
+    VoxelGrid(rows_x,rows_y,rows_z);
 
 }
 
