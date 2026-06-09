@@ -121,6 +121,7 @@ int main() {
     std::cout << "Stored faces:    " << total_faces << std::endl;
     std::cout << "Stored objects:  " << objects.size() << std::endl;
 
+    // shamelessly copied from the assignment page
     struct VoxelGrid {
         std::vector<unsigned int> voxels;
         unsigned int max_x, max_y, max_z;
@@ -148,7 +149,7 @@ int main() {
             return voxels[x + y*max_x + z*max_x*max_y];
         }
     };
-    // max bounding box
+    // bounding box extremes
     CGAL::Bbox_3 bbox = CGAL::bbox_3(vertices.begin(), vertices.end());
     double min_x = bbox.xmin();
     double min_y = bbox.ymin();
@@ -163,7 +164,93 @@ int main() {
     unsigned int rows_y = (unsigned int)std::ceil((max_y - min_y) / n) + 2;
     unsigned int rows_z = (unsigned int)std::ceil((max_z - min_z) / n) + 2;
 
-    VoxelGrid(rows_x,rows_y,rows_z);
+    // suboptimal turning object map into a list of objects but works better for us
+    std::vector<Object> object_list;
+    object_list.reserve(objects.size());
+
+    for (auto& [id, obj] : objects) {
+        object_list.push_back(obj);
+    }
+
+    // array of triangle elements
+    std::vector<Triangle> triangles;
+    triangles.reserve(total_faces);
+
+    // loops through objects
+    int num_objects = object_list.size();
+    for (int i = 0; i < num_objects; ++i) {
+        Object& obj = object_list[i];
+        int num_shells = obj.shells.size();
+        // loops through shells
+        for (int j = 0; j < num_shells; ++j) {
+            Shell& shell = obj.shells[j];
+            int num_tris = shell.triangles.size();
+            // loops through faces
+            for (int k = 0; k < num_tris; ++k) {
+                Triangle& tri = shell.triangles[k];
+                triangles.push_back(tri);
+            }
+        }
+    }
+
+    double origin_x = min_x - n;
+    double origin_y = min_y - n;
+    double origin_z = min_z - n;
+
+    VoxelGrid grid(rows_x, rows_y, rows_z);
+
+    int num_tris = triangles.size();
+
+    // loops through all triangles
+    for (int t = 0; t < num_tris; ++t) {
+        const Triangle& tri = triangles[t];
+        CGAL::Bbox_3 tb = tri.bbox();
+
+        // set range of pixels within triangle bounding box
+        int min_vx = std::floor((tb.xmin() - origin_x) / n);
+        int max_vx = std::floor((tb.xmax() - origin_x) / n);
+        int min_vy = std::floor((tb.ymin() - origin_y) / n);
+        int max_vy = std::floor((tb.ymax() - origin_y) / n);
+        int min_vz = std::floor((tb.zmin() - origin_z) / n);
+        int max_vz = std::floor((tb.zmax() - origin_z) / n);
+
+        min_vx = std::max(0, min_vx);
+        min_vy = std::max(0, min_vy);
+        min_vz = std::max(0, min_vz);
+        max_vx = std::min((int)grid.max_x - 1, max_vx);
+        max_vy = std::min((int)grid.max_y - 1, max_vy);
+        max_vz = std::min((int)grid.max_z - 1, max_vz);
+
+        // loop through x,y,z coordinates of voxels
+        for (int vx = min_vx; vx <= max_vx; ++vx) {
+            for (int vy = min_vy; vy <= max_vy; ++vy) {
+                for (int vz = min_vz; vz <= max_vz; ++vz) {
+
+                    // voxel center point
+                    Point_3 C(
+                        origin_x + (vx + 0.5) * n,
+                        origin_y + (vy + 0.5) * n,
+                        origin_z + (vz + 0.5) * n
+                    );
+
+                    // x,y,z rays to check intersection
+                    K::Segment_3 segX(C, C + K::Vector_3(n, 0, 0));
+                    K::Segment_3 segY(C, C + K::Vector_3(0, n, 0));
+                    K::Segment_3 segZ(C, C + K::Vector_3(0, 0, n));
+
+                    // if triangle intersects with any of these segments, fill pixel
+                    if (CGAL::do_intersect(tri, segX) ||
+                        CGAL::do_intersect(tri, segY) ||
+                        CGAL::do_intersect(tri, segZ))
+                    {
+                        grid(vx, vy, vz) = 1;
+                        std::cout << "pixel colored...yay!" << std::endl;
+                    }
+                }
+            }
+        }
+    }
+
 
 }
 
