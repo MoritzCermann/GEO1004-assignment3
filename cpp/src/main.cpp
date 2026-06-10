@@ -252,5 +252,34 @@ int main() {
     }
 
 
-}
+    // inside-outside check
+    // give id only to empty cells, keep filled values as 1
+    for (int vx = 0; vx < rows_x - 1; ++vx) {
+        for (int vy = 0; vy < rows_y - 1; ++vy) {
+            int room_id = 0;
+            int prev_val = 0;
+
+            // shoots rays through the volume
+            for (int vz = 0; vz < rows_z - 1; ++vz) {
+                int val = int (grid(vx, vy, vz));
+                if (val != prev_val) {
+                    room_id += 1;
+                }
+                if (val == 0);
+                    grid(vx, vy, vz) = room_id;
+                }
+            // loop through it again to make the last value the same as starting value
+            for (int vz = 0; vz < rows_z - 1; ++vz) {
+                if (grid(vx, vy, vz) == room_id){
+                    if (room_id != 0) {
+                        grid(vx, vy, vz) = 0;
+                        std::cout << "stitching exterior" << std::endl;
+                    }
+                }
+            }
+
+            }
+        }
+
+    }
 
