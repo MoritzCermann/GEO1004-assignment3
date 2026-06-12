@@ -30,7 +30,8 @@ using Vector3     = Kernel::Vector_3;
 using Grid        = CGAL::Isosurfacing::Cartesian_grid_3<Kernel>;
 using Values      = CGAL::Isosurfacing::Value_function_3<Grid>;
 using Gradients   = CGAL::Isosurfacing::Gradient_function_3<Grid>;
-using Domain      = CGAL::Isosurfacing::Dual_contouring_domain_3<Grid, Values, Gradients>;
+// using Domain      = CGAL::Isosurfacing::Dual_contouring_domain_3<Grid, Values, Gradients>;
+using Domain = CGAL::Isosurfacing::Marching_cubes_domain_3<Grid, Values>;
 using SurfaceMesh = CGAL::Surface_mesh<Point3>;
 
 namespace IS  = CGAL::Isosurfacing;
@@ -171,34 +172,32 @@ SurfaceMesh voxelsToMesh(
             double wz = (dk == 0) ? 1.0-tz : tz;
             v += wx * wy * wz * vg(ci, cj, ck);
         }
-        return FT(v);
+        return FT(1.0 - v);
     };
 
-    // -- Gradient: central finite differences of the value function ----------
-    auto gradient_fn = [&](const Point3& p) -> Vector3
-    {
-        const double h = voxel_size * 0.5;
-        double gx = (value_fn({p.x()+h, p.y(),   p.z()  })
-                   - value_fn({p.x()-h, p.y(),   p.z()  })) / (2*h);
-        double gy = (value_fn({p.x(),   p.y()+h, p.z()  })
-                   - value_fn({p.x(),   p.y()-h, p.z()  })) / (2*h);
-        double gz = (value_fn({p.x(),   p.y(),   p.z()+h})
-                   - value_fn({p.x(),   p.y(),   p.z()-h})) / (2*h);
-        return Vector3(gx, gy, gz);
-    };
+    // // -- Gradient: central finite differences of the value function ----------
+    // auto gradient_fn = [&](const Point3& p) -> Vector3
+    // {
+    //     const double h = voxel_size * 0.5;
+    //     double gx = (value_fn({p.x()+h, p.y(),   p.z()  })
+    //                - value_fn({p.x()-h, p.y(),   p.z()  })) / (2*h);
+    //     double gy = (value_fn({p.x(),   p.y()+h, p.z()  })
+    //                - value_fn({p.x(),   p.y()-h, p.z()  })) / (2*h);
+    //     double gz = (value_fn({p.x(),   p.y(),   p.z()+h})
+    //                - value_fn({p.x(),   p.y(),   p.z()-h})) / (2*h);
+    //     return Vector3(gx, gy, gz);
+    // };
 
     // -- Domain --------------------------------------------------------------
     Values    values    { value_fn,    grid };
-    Gradients gradients { gradient_fn, grid };
-    Domain    domain = IS::create_dual_contouring_domain_3(grid, values, gradients);
+    // Gradients gradients { gradient_fn, grid };
+    Domain domain = IS::create_marching_cubes_domain_3(grid, values);
 
     // -- Run dual contouring -------------------------------------------------
     std::vector<Point3>                  points;
     std::vector<std::vector<std::size_t>> faces;
 
-    IS::dual_contouring<CGAL::Parallel_if_available_tag>(
-        domain, FT(0.5), points, faces,
-        CGAL::parameters::do_not_triangulate_faces(false));
+    IS::marching_cubes<CGAL::Parallel_if_available_tag>(domain, FT(0.5), points, faces);
 
     // -- Convert polygon soup to Surface_mesh --------------------------------
     SurfaceMesh mesh;
