@@ -81,28 +81,7 @@ void flood_fill_exterior(VoxelGrid& grid, unsigned int outside_id) {
 
     std::queue<std::tuple<int,int,int>> q;
 
-    auto try_seed = [&](int x, int y, int z) {
-        if (grid(x, y, z) == 0) {
-            grid(x, y, z) = outside_id;
-            q.emplace(x, y, z);
-        }
-    };
-
-    for (unsigned int y = 0; y < Y; ++y)
-        for (unsigned int z = 0; z < Z; ++z) {
-            try_seed(0,   y, z);
-            try_seed(X-1, y, z);
-        }
-    for (unsigned int x = 0; x < X; ++x)
-        for (unsigned int z = 0; z < Z; ++z) {
-            try_seed(x, 0,   z);
-            try_seed(x, Y-1, z);
-        }
-    for (unsigned int x = 0; x < X; ++x)
-        for (unsigned int y = 0; y < Y; ++y) {
-            try_seed(x, y, 0  );
-            try_seed(x, y, Z-1);
-        }
+    q.emplace(0, 0, 0);
 
     while (!q.empty()) {
         auto [cx, cy, cz] = q.front();
@@ -316,11 +295,11 @@ int main() {
 
         // set range of voxels within triangle bounding box
         int min_vx = std::floor((tb.xmin() - origin_x) / n);
-        int max_vx = std::floor((tb.xmax() - origin_x) / n);
+        int max_vx = std::ceil((tb.xmax() - origin_x) / n);
         int min_vy = std::floor((tb.ymin() - origin_y) / n);
-        int max_vy = std::floor((tb.ymax() - origin_y) / n);
+        int max_vy = std::ceil((tb.ymax() - origin_y) / n);
         int min_vz = std::floor((tb.zmin() - origin_z) / n);
-        int max_vz = std::floor((tb.zmax() - origin_z) / n);
+        int max_vz = std::ceil((tb.zmax() - origin_z) / n);
 
         min_vx = std::max(0, min_vx);
         min_vy = std::max(0, min_vy);
