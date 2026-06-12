@@ -22,6 +22,35 @@ struct Object {
     std::vector<Shell> shells;
 };
 
+// shamelessly copied from the assignment page
+struct VoxelGrid {
+    std::vector<unsigned int> voxels;
+    unsigned int max_x, max_y, max_z;
+
+    VoxelGrid(unsigned int x, unsigned int y, unsigned int z) {
+        max_x = x;
+        max_y = y;
+        max_z = z;
+        unsigned int total_voxels = x*y*z;
+        voxels.reserve(total_voxels);
+        for (unsigned int i = 0; i < total_voxels; ++i) voxels.push_back(0);
+    }
+
+    unsigned int &operator()(const unsigned int &x, const unsigned int &y, const unsigned int &z) {
+        assert(x < max_x);
+        assert(y < max_y);
+        assert(z < max_z);
+        return voxels[x + y*max_x + z*max_x*max_y];
+    }
+
+    unsigned int operator()(const unsigned int &x, const unsigned int &y, const unsigned int &z) const {
+        assert(x < max_x);
+        assert(y < max_y);
+        assert(z < max_z);
+        return voxels[x + y*max_x + z*max_x*max_y];
+    }
+};
+
 Point_3 voxel_to_world(
     int vx, int vy, int vz,
     double min_x, double min_y, double min_z,
@@ -121,34 +150,7 @@ int main() {
     std::cout << "Stored faces:    " << total_faces << std::endl;
     std::cout << "Stored objects:  " << objects.size() << std::endl;
 
-    // shamelessly copied from the assignment page
-    struct VoxelGrid {
-        std::vector<unsigned int> voxels;
-        unsigned int max_x, max_y, max_z;
 
-        VoxelGrid(unsigned int x, unsigned int y, unsigned int z) {
-            max_x = x;
-            max_y = y;
-            max_z = z;
-            unsigned int total_voxels = x*y*z;
-            voxels.reserve(total_voxels);
-            for (unsigned int i = 0; i < total_voxels; ++i) voxels.push_back(0);
-        }
-
-        unsigned int &operator()(const unsigned int &x, const unsigned int &y, const unsigned int &z) {
-            assert(x < max_x);
-            assert(y < max_y);
-            assert(z < max_z);
-            return voxels[x + y*max_x + z*max_x*max_y];
-        }
-
-        unsigned int operator()(const unsigned int &x, const unsigned int &y, const unsigned int &z) const {
-            assert(x < max_x);
-            assert(y < max_y);
-            assert(z < max_z);
-            return voxels[x + y*max_x + z*max_x*max_y];
-        }
-    };
     // bounding box extremes
     CGAL::Bbox_3 bbox = CGAL::bbox_3(vertices.begin(), vertices.end());
     double min_x = bbox.xmin();
@@ -262,11 +264,19 @@ int main() {
             // shoots rays through the volume
             for (int vz = 0; vz < rows_z - 1; ++vz) {
                 int val = int (grid(vx, vy, vz));
-                if (val != prev_val) {
-                    room_id += 1;
+
+                if (val == 1) {
+                    if (room_id == 0) {
+                        room_id = 2;
+                    }
+                    else{
+                        room_id += 1;
+                        continue;
+                    }
                 }
-                if (val == 0);
+                if (val == 0){
                     grid(vx, vy, vz) = room_id;
+                    std::cout << "room_id: " << room_id << std::endl;
                 }
             // loop through it again to make the last value the same as starting value
             for (int vz = 0; vz < rows_z - 1; ++vz) {
@@ -278,8 +288,10 @@ int main() {
                 }
             }
 
+
+
             }
         }
 
     }
-
+}
