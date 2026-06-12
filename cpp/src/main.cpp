@@ -328,53 +328,7 @@ int main() {
         }
     }
 
-    std::cout << "Sampling boundary voxel values:" << std::endl;
-    unsigned int boundary_zeros = 0, boundary_ones = 0, boundary_other = 0;
-    for (unsigned int y = 0; y < rows_y; ++y)
-        for (unsigned int z = 0; z < rows_z; ++z) {
-            unsigned int v0 = grid(0,       y, z);
-            unsigned int v1 = grid(rows_x-1, y, z);
-            if (v0 == 0) ++boundary_zeros; else if (v0 == 1) ++boundary_ones; else ++boundary_other;
-            if (v1 == 0) ++boundary_zeros; else if (v1 == 1) ++boundary_ones; else ++boundary_other;
-        }
-    for (unsigned int x = 0; x < rows_x; ++x)
-        for (unsigned int z = 0; z < rows_z; ++z) {
-            unsigned int v0 = grid(x, 0,       z);
-            unsigned int v1 = grid(x, rows_y-1, z);
-            if (v0 == 0) ++boundary_zeros; else if (v0 == 1) ++boundary_ones; else ++boundary_other;
-            if (v1 == 0) ++boundary_zeros; else if (v1 == 1) ++boundary_ones; else ++boundary_other;
-        }
-    for (unsigned int x = 0; x < rows_x; ++x)
-        for (unsigned int y = 0; y < rows_y; ++y) {
-            unsigned int v0 = grid(x, y, 0      );
-            unsigned int v1 = grid(x, y, rows_z-1);
-            if (v0 == 0) ++boundary_zeros; else if (v0 == 1) ++boundary_ones; else ++boundary_other;
-            if (v1 == 0) ++boundary_zeros; else if (v1 == 1) ++boundary_ones; else ++boundary_other;
-        }
-    std::cout << "  Boundary zeros: " << boundary_zeros << std::endl;
-    std::cout << "  Boundary ones:  " << boundary_ones  << std::endl;
-    std::cout << "  Boundary other: " << boundary_other << std::endl;
-
-    // Also print total grid dimensions
-    std::cout << "Grid dimensions: " << rows_x << " x " << rows_y << " x " << rows_z << std::endl;
-    std::cout << "Total voxels: " << rows_x * rows_y * rows_z << std::endl;
-    std::cout << "Sum of zeros+ones should equal total: " << (7685 + 635) << std::endl;
-
     const unsigned int OUTSIDE_ID  = 2;
-
-    unsigned int zeros = 0, ones = 0, twos = 0;
-    for (unsigned int x = 0; x < rows_x; ++x)
-        for (unsigned int y = 0; y < rows_y; ++y)
-            for (unsigned int z = 0; z < rows_z; ++z) {
-                unsigned int v = grid(x, y, z);
-                if      (v == 0) ++zeros;
-                else if (v == 1) ++ones;
-                else if (v == 2) ++twos;
-            }
-    std::cout << "After exterior fill:" << std::endl;
-    std::cout << "  Unlabelled (0):  " << zeros << std::endl;
-    std::cout << "  Surface    (1):  " << ones  << std::endl;
-    std::cout << "  Exterior   (2):  " << twos  << std::endl;
 
     const unsigned int INTERIOR_FIRST_ID = 3;
 
