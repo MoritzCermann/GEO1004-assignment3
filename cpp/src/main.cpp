@@ -318,29 +318,11 @@ int main() {
                     double y0 = origin_y + vy * n,       y1 = y0 + n;
                     double z0 = origin_z + vz * n,       z1 = z0 + n;
 
-                    // 6 faces as 2 triangles each, test all 12
-                    bool hit = false;
+                    CGAL::Bbox_3 bbox(x0, y0, z0, x1, y1, z1);
 
-                    // -X and +X faces (yz plane)
-                    for (double fx : {x0, x1}) {
-                        Triangle face1(Point_3(fx,y0,z0), Point_3(fx,y1,z0), Point_3(fx,y1,z1));
-                        Triangle face2(Point_3(fx,y0,z0), Point_3(fx,y1,z1), Point_3(fx,y0,z1));
-                        if (CGAL::do_intersect(tri, face1) || CGAL::do_intersect(tri, face2)) { hit = true; break; }
+                    if (CGAL::do_intersect(bbox, tri)) {
+                        grid(vx, vy, vz) = 1;
                     }
-                    // -Y and +Y faces (xz plane)
-                    if (!hit) for (double fy : {y0, y1}) {
-                        Triangle face1(Point_3(x0,fy,z0), Point_3(x1,fy,z0), Point_3(x1,fy,z1));
-                        Triangle face2(Point_3(x0,fy,z0), Point_3(x1,fy,z1), Point_3(x0,fy,z1));
-                        if (CGAL::do_intersect(tri, face1) || CGAL::do_intersect(tri, face2)) { hit = true; break; }
-                    }
-                    // -Z and +Z faces (xy plane)
-                    if (!hit) for (double fz : {z0, z1}) {
-                        Triangle face1(Point_3(x0,y0,fz), Point_3(x1,y0,fz), Point_3(x1,y1,fz));
-                        Triangle face2(Point_3(x0,y0,fz), Point_3(x1,y1,fz), Point_3(x0,y1,fz));
-                        if (CGAL::do_intersect(tri, face1) || CGAL::do_intersect(tri, face2)) { hit = true; break; }
-                    }
-
-                    if (hit) grid(vx, vy, vz) = 1;
                 }
             }
         }
