@@ -8,6 +8,33 @@
 #include <queue>
 
 #include <CGAL/Simple_cartesian.h>
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/Surface_mesh.h>
+
+#include <CGAL/Polygon_mesh_processing/polygon_soup_to_polygon_mesh.h>
+#include <CGAL/IO/polygon_mesh_io.h>
+
+#include <CGAL/Isosurfacing_3/Cartesian_grid_3.h>
+#include <CGAL/Isosurfacing_3/Value_function_3.h>
+#include <CGAL/Isosurfacing_3/Gradient_function_3.h>
+#include <CGAL/Isosurfacing_3/dual_contouring_3.h>
+#include <CGAL/Isosurfacing_3/Dual_contouring_domain_3.h>
+
+#include <CGAL/Isosurfacing_3/marching_cubes_3.h>
+#include <CGAL/Isosurfacing_3/Marching_cubes_domain_3.h>
+
+using Kernel      = CGAL::Simple_cartesian<double>;
+using FT          = Kernel::FT;
+using Point3      = Kernel::Point_3;
+using Vector3     = Kernel::Vector_3;
+using Grid        = CGAL::Isosurfacing::Cartesian_grid_3<Kernel>;
+using Values      = CGAL::Isosurfacing::Value_function_3<Grid>;
+using Gradients   = CGAL::Isosurfacing::Gradient_function_3<Grid>;
+using Domain      = CGAL::Isosurfacing::Dual_contouring_domain_3<Grid, Values, Gradients>;
+using SurfaceMesh = CGAL::Surface_mesh<Point3>;
+
+namespace IS  = CGAL::Isosurfacing;
+namespace PMP = CGAL::Polygon_mesh_processing;
 
 typedef double FT;
 typedef CGAL::Simple_cartesian<FT> K;
@@ -99,6 +126,88 @@ void flood_fill_exterior(VoxelGrid& grid, unsigned int outside_id) {
             }
         }
     }
+}
+
+SurfaceMesh voxelsToMesh(
+    const VoxelGrid& vg,
+    double voxel_size = 1.0)
+{
+    const int nx = (int)vg.max_x;
+    const int ny = (int)vg.max_y;
+    const int nz = (int)vg.max_z;
+
+    // -- Grid ----------------------------------------------------------------
+    const CGAL::Bbox_3 bbox(0.0, 0.0, 0.0,
+                            nx * voxel_size, ny * voxel_size, nz * voxel_size);
+    Grid grid { bbox, CGAL::make_array<std::size_t>(nx, ny, nz) };
+
+    // -- Value function: trilinear interpolation of the 0/1 grid ------------
+    // Iso-surface extracted at 0.5 — exactly at the solid/void boundary.
+    auto value_fn = [&](const Point3& p) -> FT
+    {
+        auto clamp = [](int v, int lo, int hi){ return std::max(lo, std::min(hi, v)); };
+
+        double x = p.x() / voxel_size - 0.5;
+        double y = p.y() / voxel_size - 0.5;
+        double z = p.z() / voxel_size - 0.5;
+
+        int i0 = (int)std::floor(x);
+        int j0 = (int)std::floor(y);
+        int k0 = (int)std::floor(z);
+
+        double tx = x - i0, ty = y - j0, tz = z - k0;
+
+        double v = 0.0;
+        for (int di = 0; di <= 1; ++di)
+        for (int dj = 0; dj <= 1; ++dj)
+        for (int dk = 0; dk <= 1; ++dk)
+        {
+            int ci = clamp(i0+di, 0, nx-1);
+            int cj = clamp(j0+dj, 0, ny-1);
+            int ck = clamp(k0+dk, 0, nz-1);
+
+            double wx = (di == 0) ? 1.0-tx : tx;
+            double wy = (dj == 0) ? 1.0-ty : ty;
+            double wz = (dk == 0) ? 1.0-tz : tz;
+            v += wx * wy * wz * vg(ci, cj, ck);
+        }
+        return FT(v);
+    };
+
+    // -- Gradient: central finite differences of the value function ----------
+    auto gradient_fn = [&](const Point3& p) -> Vector3
+    {
+        const double h = voxel_size * 0.5;
+        double gx = (value_fn({p.x()+h, p.y(),   p.z()  })
+                   - value_fn({p.x()-h, p.y(),   p.z()  })) / (2*h);
+        double gy = (value_fn({p.x(),   p.y()+h, p.z()  })
+                   - value_fn({p.x(),   p.y()-h, p.z()  })) / (2*h);
+        double gz = (value_fn({p.x(),   p.y(),   p.z()+h})
+                   - value_fn({p.x(),   p.y(),   p.z()-h})) / (2*h);
+        return Vector3(gx, gy, gz);
+    };
+
+    // -- Domain --------------------------------------------------------------
+    Values    values    { value_fn,    grid };
+    Gradients gradients { gradient_fn, grid };
+    Domain    domain = IS::create_dual_contouring_domain_3(grid, values, gradients);
+
+    // -- Run dual contouring -------------------------------------------------
+    std::vector<Point3>                  points;
+    std::vector<std::vector<std::size_t>> faces;
+
+    IS::dual_contouring<CGAL::Parallel_if_available_tag>(
+        domain, FT(0.5), points, faces,
+        CGAL::parameters::do_not_triangulate_faces(false));
+
+    // -- Convert polygon soup to Surface_mesh --------------------------------
+    SurfaceMesh mesh;
+    if (!PMP::is_polygon_soup_a_polygon_mesh(faces))
+        std::cerr << "Warning: output soup is not a 2-manifold surface.\n";
+    else
+        PMP::polygon_soup_to_polygon_mesh(points, faces, mesh);
+
+    return mesh;
 }
 
 // For every voxel still at 0 (interior air not yet labelled), flood fill
@@ -328,28 +437,12 @@ int main() {
         }
     }
 
-    const unsigned int OUTSIDE_ID  = 2;
+    SurfaceMesh mesh = voxelsToMesh(grid, n);
 
-    const unsigned int INTERIOR_FIRST_ID = 3;
+    std::cout << mesh.num_vertices() << " vertices, "
+              << mesh.num_faces()    << " faces\n";
 
-    flood_fill_exterior(grid, OUTSIDE_ID);
+    CGAL::IO::write_polygon_mesh("output.off", mesh);
 
-    std::map<unsigned int, unsigned int> value_counts;
-    for (unsigned int x = 0; x < rows_x; ++x)
-        for (unsigned int y = 0; y < rows_y; ++y)
-            for (unsigned int z = 0; z < rows_z; ++z)
-                value_counts[grid(x, y, z)]++;
-
-    std::cout << "All values in grid after exterior fill:" << std::endl;
-    for (auto& [val, count] : value_counts)
-        std::cout << "  value " << val << ": " << count << " voxels" << std::endl;
-
-    unsigned int num_rooms = flood_fill_interior(grid, INTERIOR_FIRST_ID);
-
-    // After both fills:
-    //   1                          = surface voxel
-    //   2                          = exterior air
-    //   3, 4, 5, ... (first_id+N)  = individual interior air pockets
-
-    std::cout << "Flood fill complete. Interior regions found: " << num_rooms << std::endl;
+    return 0;
 }
