@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <filesystem>
+#include <queue>
 
 #include <CGAL/Simple_cartesian.h>
 
@@ -22,6 +24,35 @@ struct Object {
     std::vector<Shell> shells;
 };
 
+// shamelessly copied from the assignment page
+struct VoxelGrid {
+    std::vector<unsigned int> voxels;
+    unsigned int max_x, max_y, max_z;
+
+    VoxelGrid(unsigned int x, unsigned int y, unsigned int z) {
+        max_x = x;
+        max_y = y;
+        max_z = z;
+        unsigned int total_voxels = x*y*z;
+        voxels.reserve(total_voxels);
+        for (unsigned int i = 0; i < total_voxels; ++i) voxels.push_back(0);
+    }
+
+    unsigned int &operator()(const unsigned int &x, const unsigned int &y, const unsigned int &z) {
+        assert(x < max_x);
+        assert(y < max_y);
+        assert(z < max_z);
+        return voxels[x + y*max_x + z*max_x*max_y];
+    }
+
+    unsigned int operator()(const unsigned int &x, const unsigned int &y, const unsigned int &z) const {
+        assert(x < max_x);
+        assert(y < max_y);
+        assert(z < max_z);
+        return voxels[x + y*max_x + z*max_x*max_y];
+    }
+};
+
 Point_3 voxel_to_world(
     int vx, int vy, int vz,
     double min_x, double min_y, double min_z,
@@ -36,7 +67,110 @@ Point_3 voxel_to_world(
 
 std::map<std::string, Object> objects;
 
-const std::string input_file = "../data/OpenHouse2x3-keep-relevant-only.obj";
+const std::string input_file = "../../data/IfcOpenHouse_IFC2x3_simplified.obj";
+
+// Flood fill from all boundary voxels outward — marks exterior as OUTSIDE_ID (2).
+void flood_fill_exterior(VoxelGrid& grid, unsigned int outside_id) {
+    const unsigned int X = grid.max_x;
+    const unsigned int Y = grid.max_y;
+    const unsigned int Z = grid.max_z;
+
+    const int dx[] = {1,-1, 0, 0, 0, 0};
+    const int dy[] = {0, 0, 1,-1, 0, 0};
+    const int dz[] = {0, 0, 0, 0, 1,-1};
+
+    std::queue<std::tuple<int,int,int>> q;
+
+    auto try_seed = [&](int x, int y, int z) {
+        if (grid(x, y, z) == 0) {
+            grid(x, y, z) = outside_id;
+            q.emplace(x, y, z);
+        }
+    };
+
+    for (unsigned int y = 0; y < Y; ++y)
+        for (unsigned int z = 0; z < Z; ++z) {
+            try_seed(0,   y, z);
+            try_seed(X-1, y, z);
+        }
+    for (unsigned int x = 0; x < X; ++x)
+        for (unsigned int z = 0; z < Z; ++z) {
+            try_seed(x, 0,   z);
+            try_seed(x, Y-1, z);
+        }
+    for (unsigned int x = 0; x < X; ++x)
+        for (unsigned int y = 0; y < Y; ++y) {
+            try_seed(x, y, 0  );
+            try_seed(x, y, Z-1);
+        }
+
+    while (!q.empty()) {
+        auto [cx, cy, cz] = q.front();
+        q.pop();
+        for (int d = 0; d < 6; ++d) {
+            int nx = cx + dx[d];
+            int ny = cy + dy[d];
+            int nz = cz + dz[d];
+            if (nx < 0 || nx >= (int)X) continue;
+            if (ny < 0 || ny >= (int)Y) continue;
+            if (nz < 0 || nz >= (int)Z) continue;
+            if (grid(nx, ny, nz) == 0) {
+                grid(nx, ny, nz) = outside_id;
+                q.emplace(nx, ny, nz);
+            }
+        }
+    }
+}
+
+// For every voxel still at 0 (interior air not yet labelled), flood fill
+// its connected region with the next available ID (starting at first_id).
+// Returns the number of interior regions found.
+unsigned int flood_fill_interior(VoxelGrid& grid, unsigned int first_id) {
+    const unsigned int X = grid.max_x;
+    const unsigned int Y = grid.max_y;
+    const unsigned int Z = grid.max_z;
+
+    const int dx[] = {1,-1, 0, 0, 0, 0};
+    const int dy[] = {0, 0, 1,-1, 0, 0};
+    const int dz[] = {0, 0, 0, 0, 1,-1};
+
+    unsigned int current_id = first_id;
+
+    for (unsigned int x = 0; x < X; ++x) {
+        for (unsigned int y = 0; y < Y; ++y) {
+            for (unsigned int z = 0; z < Z; ++z) {
+                // Only start a new fill from an unlabelled interior voxel
+                if (grid(x, y, z) != 0) continue;
+
+                // BFS over this connected pocket
+                grid(x, y, z) = current_id;
+                std::queue<std::tuple<int,int,int>> q;
+                q.emplace(x, y, z);
+
+                while (!q.empty()) {
+                    auto [cx, cy, cz] = q.front();
+                    q.pop();
+                    for (int d = 0; d < 6; ++d) {
+                        int nx = cx + dx[d];
+                        int ny = cy + dy[d];
+                        int nz = cz + dz[d];
+                        if (nx < 0 || nx >= (int)X) continue;
+                        if (ny < 0 || ny >= (int)Y) continue;
+                        if (nz < 0 || nz >= (int)Z) continue;
+                        if (grid(nx, ny, nz) == 0) {
+                            grid(nx, ny, nz) = current_id;
+                            q.emplace(nx, ny, nz);
+                        }
+                    }
+                }
+
+                ++current_id;
+            }
+        }
+    }
+
+    return current_id - first_id; // number of regions found
+}
 
 int main() {
     std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
@@ -121,34 +255,7 @@ int main() {
     std::cout << "Stored faces:    " << total_faces << std::endl;
     std::cout << "Stored objects:  " << objects.size() << std::endl;
 
-    // shamelessly copied from the assignment page
-    struct VoxelGrid {
-        std::vector<unsigned int> voxels;
-        unsigned int max_x, max_y, max_z;
 
-        VoxelGrid(unsigned int x, unsigned int y, unsigned int z) {
-            max_x = x;
-            max_y = y;
-            max_z = z;
-            unsigned int total_voxels = x*y*z;
-            voxels.reserve(total_voxels);
-            for (unsigned int i = 0; i < total_voxels; ++i) voxels.push_back(0);
-        }
-
-        unsigned int &operator()(const unsigned int &x, const unsigned int &y, const unsigned int &z) {
-            assert(x < max_x);
-            assert(y < max_y);
-            assert(z < max_z);
-            return voxels[x + y*max_x + z*max_x*max_y];
-        }
-
-        unsigned int operator()(const unsigned int &x, const unsigned int &y, const unsigned int &z) const {
-            assert(x < max_x);
-            assert(y < max_y);
-            assert(z < max_z);
-            return voxels[x + y*max_x + z*max_x*max_y];
-        }
-    };
     // bounding box extremes
     CGAL::Bbox_3 bbox = CGAL::bbox_3(vertices.begin(), vertices.end());
     double min_x = bbox.xmin();
@@ -160,9 +267,9 @@ int main() {
 
     // rows, columns, height
     double n = 0.5;
-    unsigned int rows_x = (unsigned int)std::ceil((max_x - min_x) / n) + 2;
-    unsigned int rows_y = (unsigned int)std::ceil((max_y - min_y) / n) + 2;
-    unsigned int rows_z = (unsigned int)std::ceil((max_z - min_z) / n) + 2;
+    unsigned int rows_x = (unsigned int)std::ceil((max_x - min_x) / n) + 4;
+    unsigned int rows_y = (unsigned int)std::ceil((max_y - min_y) / n) + 4;
+    unsigned int rows_z = (unsigned int)std::ceil((max_z - min_z) / n) + 4;
 
     // suboptimal turning object map into a list of objects but works better for us
     std::vector<Object> object_list;
@@ -193,20 +300,21 @@ int main() {
         }
     }
 
-    double origin_x = min_x - n;
-    double origin_y = min_y - n;
-    double origin_z = min_z - n;
+    double origin_x = min_x - 2*n;
+    double origin_y = min_y - 2*n;
+    double origin_z = min_z - 2*n;
 
     VoxelGrid grid(rows_x, rows_y, rows_z);
 
     int num_tris = triangles.size();
 
+    // voxelise surfaces
     // loops through all triangles
     for (int t = 0; t < num_tris; ++t) {
         const Triangle& tri = triangles[t];
         CGAL::Bbox_3 tb = tri.bbox();
 
-        // set range of pixels within triangle bounding box
+        // set range of voxels within triangle bounding box
         int min_vx = std::floor((tb.xmin() - origin_x) / n);
         int max_vx = std::floor((tb.xmax() - origin_x) / n);
         int min_vy = std::floor((tb.ymin() - origin_y) / n);
@@ -226,60 +334,107 @@ int main() {
             for (int vy = min_vy; vy <= max_vy; ++vy) {
                 for (int vz = min_vz; vz <= max_vz; ++vz) {
 
-                    // voxel center point
-                    Point_3 C(
-                        origin_x + (vx + 0.5) * n,
-                        origin_y + (vy + 0.5) * n,
-                        origin_z + (vz + 0.5) * n
-                    );
+                    // The 8 corners of this voxel
+                    double x0 = origin_x + vx * n,       x1 = x0 + n;
+                    double y0 = origin_y + vy * n,       y1 = y0 + n;
+                    double z0 = origin_z + vz * n,       z1 = z0 + n;
 
-                    // x,y,z rays to check intersection
-                    K::Segment_3 segX(C, C + K::Vector_3(n, 0, 0));
-                    K::Segment_3 segY(C, C + K::Vector_3(0, n, 0));
-                    K::Segment_3 segZ(C, C + K::Vector_3(0, 0, n));
+                    // 6 faces as 2 triangles each, test all 12
+                    bool hit = false;
 
-                    // if triangle intersects with any of these segments, fill pixel
-                    if (CGAL::do_intersect(tri, segX) ||
-                        CGAL::do_intersect(tri, segY) ||
-                        CGAL::do_intersect(tri, segZ))
-                    {
-                        grid(vx, vy, vz) = 1;
-                        std::cout << "pixel colored...yay!" << std::endl;
+                    // -X and +X faces (yz plane)
+                    for (double fx : {x0, x1}) {
+                        Triangle face1(Point_3(fx,y0,z0), Point_3(fx,y1,z0), Point_3(fx,y1,z1));
+                        Triangle face2(Point_3(fx,y0,z0), Point_3(fx,y1,z1), Point_3(fx,y0,z1));
+                        if (CGAL::do_intersect(tri, face1) || CGAL::do_intersect(tri, face2)) { hit = true; break; }
                     }
+                    // -Y and +Y faces (xz plane)
+                    if (!hit) for (double fy : {y0, y1}) {
+                        Triangle face1(Point_3(x0,fy,z0), Point_3(x1,fy,z0), Point_3(x1,fy,z1));
+                        Triangle face2(Point_3(x0,fy,z0), Point_3(x1,fy,z1), Point_3(x0,fy,z1));
+                        if (CGAL::do_intersect(tri, face1) || CGAL::do_intersect(tri, face2)) { hit = true; break; }
+                    }
+                    // -Z and +Z faces (xy plane)
+                    if (!hit) for (double fz : {z0, z1}) {
+                        Triangle face1(Point_3(x0,y0,fz), Point_3(x1,y0,fz), Point_3(x1,y1,fz));
+                        Triangle face2(Point_3(x0,y0,fz), Point_3(x1,y1,fz), Point_3(x0,y1,fz));
+                        if (CGAL::do_intersect(tri, face1) || CGAL::do_intersect(tri, face2)) { hit = true; break; }
+                    }
+
+                    if (hit) grid(vx, vy, vz) = 1;
                 }
             }
         }
     }
 
-
-    // inside-outside check
-    // give id only to empty cells, keep filled values as 1
-    for (int vx = 0; vx < rows_x - 1; ++vx) {
-        for (int vy = 0; vy < rows_y - 1; ++vy) {
-            int room_id = 0;
-            int prev_val = 0;
-
-            // shoots rays through the volume
-            for (int vz = 0; vz < rows_z - 1; ++vz) {
-                int val = int (grid(vx, vy, vz));
-                if (val != prev_val) {
-                    room_id += 1;
-                }
-                if (val == 0);
-                    grid(vx, vy, vz) = room_id;
-                }
-            // loop through it again to make the last value the same as starting value
-            for (int vz = 0; vz < rows_z - 1; ++vz) {
-                if (grid(vx, vy, vz) == room_id){
-                    if (room_id != 0) {
-                        grid(vx, vy, vz) = 0;
-                        std::cout << "stitching exterior" << std::endl;
-                    }
-                }
-            }
-
-            }
+    std::cout << "Sampling boundary voxel values:" << std::endl;
+    unsigned int boundary_zeros = 0, boundary_ones = 0, boundary_other = 0;
+    for (unsigned int y = 0; y < rows_y; ++y)
+        for (unsigned int z = 0; z < rows_z; ++z) {
+            unsigned int v0 = grid(0,       y, z);
+            unsigned int v1 = grid(rows_x-1, y, z);
+            if (v0 == 0) ++boundary_zeros; else if (v0 == 1) ++boundary_ones; else ++boundary_other;
+            if (v1 == 0) ++boundary_zeros; else if (v1 == 1) ++boundary_ones; else ++boundary_other;
         }
+    for (unsigned int x = 0; x < rows_x; ++x)
+        for (unsigned int z = 0; z < rows_z; ++z) {
+            unsigned int v0 = grid(x, 0,       z);
+            unsigned int v1 = grid(x, rows_y-1, z);
+            if (v0 == 0) ++boundary_zeros; else if (v0 == 1) ++boundary_ones; else ++boundary_other;
+            if (v1 == 0) ++boundary_zeros; else if (v1 == 1) ++boundary_ones; else ++boundary_other;
+        }
+    for (unsigned int x = 0; x < rows_x; ++x)
+        for (unsigned int y = 0; y < rows_y; ++y) {
+            unsigned int v0 = grid(x, y, 0      );
+            unsigned int v1 = grid(x, y, rows_z-1);
+            if (v0 == 0) ++boundary_zeros; else if (v0 == 1) ++boundary_ones; else ++boundary_other;
+            if (v1 == 0) ++boundary_zeros; else if (v1 == 1) ++boundary_ones; else ++boundary_other;
+        }
+    std::cout << "  Boundary zeros: " << boundary_zeros << std::endl;
+    std::cout << "  Boundary ones:  " << boundary_ones  << std::endl;
+    std::cout << "  Boundary other: " << boundary_other << std::endl;
 
-    }
+    // Also print total grid dimensions
+    std::cout << "Grid dimensions: " << rows_x << " x " << rows_y << " x " << rows_z << std::endl;
+    std::cout << "Total voxels: " << rows_x * rows_y * rows_z << std::endl;
+    std::cout << "Sum of zeros+ones should equal total: " << (7685 + 635) << std::endl;
 
+    const unsigned int OUTSIDE_ID  = 2;
+
+    unsigned int zeros = 0, ones = 0, twos = 0;
+    for (unsigned int x = 0; x < rows_x; ++x)
+        for (unsigned int y = 0; y < rows_y; ++y)
+            for (unsigned int z = 0; z < rows_z; ++z) {
+                unsigned int v = grid(x, y, z);
+                if      (v == 0) ++zeros;
+                else if (v == 1) ++ones;
+                else if (v == 2) ++twos;
+            }
+    std::cout << "After exterior fill:" << std::endl;
+    std::cout << "  Unlabelled (0):  " << zeros << std::endl;
+    std::cout << "  Surface    (1):  " << ones  << std::endl;
+    std::cout << "  Exterior   (2):  " << twos  << std::endl;
+
+    const unsigned int INTERIOR_FIRST_ID = 3;
+
+    flood_fill_exterior(grid, OUTSIDE_ID);
+
+    std::map<unsigned int, unsigned int> value_counts;
+    for (unsigned int x = 0; x < rows_x; ++x)
+        for (unsigned int y = 0; y < rows_y; ++y)
+            for (unsigned int z = 0; z < rows_z; ++z)
+                value_counts[grid(x, y, z)]++;
+
+    std::cout << "All values in grid after exterior fill:" << std::endl;
+    for (auto& [val, count] : value_counts)
+        std::cout << "  value " << val << ": " << count << " voxels" << std::endl;
+
+    unsigned int num_rooms = flood_fill_interior(grid, INTERIOR_FIRST_ID);
+
+    // After both fills:
+    //   1                          = surface voxel
+    //   2                          = exterior air
+    //   3, 4, 5, ... (first_id+N)  = individual interior air pockets
+
+    std::cout << "Flood fill complete. Interior regions found: " << num_rooms << std::endl;
+}
