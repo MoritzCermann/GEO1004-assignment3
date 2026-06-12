@@ -267,9 +267,9 @@ int main() {
 
     // rows, columns, height
     double n = 0.5;
-    unsigned int rows_x = (unsigned int)std::ceil((max_x - min_x) / n) + 4;
-    unsigned int rows_y = (unsigned int)std::ceil((max_y - min_y) / n) + 4;
-    unsigned int rows_z = (unsigned int)std::ceil((max_z - min_z) / n) + 4;
+    unsigned int rows_x = (unsigned int)std::ceil((max_x - min_x) / n) + 2;
+    unsigned int rows_y = (unsigned int)std::ceil((max_y - min_y) / n) + 2;
+    unsigned int rows_z = (unsigned int)std::ceil((max_z - min_z) / n) + 2;
 
     // suboptimal turning object map into a list of objects but works better for us
     std::vector<Object> object_list;
@@ -300,9 +300,9 @@ int main() {
         }
     }
 
-    double origin_x = min_x - 2*n;
-    double origin_y = min_y - 2*n;
-    double origin_z = min_z - 2*n;
+    double origin_x = min_x - n;
+    double origin_y = min_y - n;
+    double origin_z = min_z - n;
 
     VoxelGrid grid(rows_x, rows_y, rows_z);
 
