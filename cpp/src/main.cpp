@@ -308,6 +308,95 @@ ExtractedBoundaries extract_boundaries(SurfaceMesh& mesh)
     return result;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Exposed-face extraction
+//
+// For every solid voxel, check all 6 axis-aligned neighbours.
+// Emit the shared quad face whenever the neighbour is empty / out of bounds.
+// Quads → 2 triangles; vertices are deduplicated via a map.
+// ─────────────────────────────────────────────────────────────────────────────
+SurfaceMesh voxelsToSurfaceMesh(const VoxelGrid& grid)
+{
+    // Deduplicate vertices by integer grid corner coordinates.
+    using VtxKey = std::tuple<int,int,int>;
+    std::map<VtxKey, std::size_t> vtxMap;
+    std::vector<Point_3>              points;
+    std::vector<std::vector<std::size_t>> polygons;
+
+    auto getOrAddVertex = [&](int x, int y, int z) -> std::size_t {
+        VtxKey key{x, y, z};
+        auto [it, inserted] = vtxMap.emplace(key, points.size());
+        if (inserted) points.emplace_back(x, y, z);
+        return it->second;
+    };
+
+    struct FaceDef {
+        int dx, dy, dz;
+        std::array<std::array<int,3>, 4> corners;
+    };
+
+    // clang-format off
+    static const FaceDef faces[6] = {
+        // +X  (right)
+        { 1, 0, 0, {{{ 1,0,0 },{ 1,1,0 },{ 1,1,1 },{ 1,0,1 }}} },
+        // -X  (left)
+        {-1, 0, 0, {{{ 0,1,0 },{ 0,0,0 },{ 0,0,1 },{ 0,1,1 }}} },
+        // +Y  (top)
+        { 0, 1, 0, {{{ 0,1,0 },{ 0,1,1 },{ 1,1,1 },{ 1,1,0 }}} },
+        // -Y  (bottom)
+        { 0,-1, 0, {{{ 0,0,1 },{ 0,0,0 },{ 1,0,0 },{ 1,0,1 }}} },
+        // +Z  (front)
+        { 0, 0, 1, {{{ 0,0,1 },{ 1,0,1 },{ 1,1,1 },{ 0,1,1 }}} },
+        // -Z  (back)
+        { 0, 0,-1, {{{ 1,0,0 },{ 0,0,0 },{ 0,1,0 },{ 1,1,0 }}} },
+    };
+    // clang-format on
+
+    for (int x = 0; x < (int)grid.max_x; ++x)
+    for (int y = 0; y < (int)grid.max_y; ++y)
+    for (int z = 0; z < (int)grid.max_z; ++z)
+    {
+        if (grid(x, y, z) != 1) continue;
+
+        for (const auto& fd : faces)
+        {
+            const int nx = x + fd.dx;
+            const int ny = y + fd.dy;
+            const int nz = z + fd.dz;
+
+            // If neighbour exists and is also solid, this face is internal.
+            if (nx >= 0 && nx < (int)grid.max_x &&
+                ny >= 0 && ny < (int)grid.max_y &&
+                nz >= 0 && nz < (int)grid.max_z &&
+                grid(nx, ny, nz) == 1)
+            {
+                continue;
+            }
+
+            std::size_t vi[4];
+            for (int i = 0; i < 4; ++i)
+            {
+                vi[i] = getOrAddVertex(
+                    x + fd.corners[i][0],
+                    y + fd.corners[i][1],
+                    z + fd.corners[i][2]);
+            }
+
+            // Quad -> 2 triangles
+            polygons.push_back({
+                vi[0], vi[1], vi[2], vi[3]
+                });
+
+        }
+    }
+
+    PMP::orient_polygon_soup(points, polygons);
+
+    SurfaceMesh mesh;
+    PMP::polygon_soup_to_polygon_mesh(points, polygons, mesh);
+    return mesh;
+}
+
 int main() {
     std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
 
@@ -469,15 +558,20 @@ int main() {
         for (int vx = min_vx; vx <= max_vx; ++vx) {
             for (int vy = min_vy; vy <= max_vy; ++vy) {
                 for (int vz = min_vz; vz <= max_vz; ++vz) {
+                    Point_3 C(
+                        origin_x + (vx + 0.5) * n,
+                        origin_y + (vy + 0.5) * n,
+                        origin_z + (vz + 0.5) * n
+                    );
+                    K::Segment_3 segX(C - K::Vector_3( n/2, 0, 0), C + K::Vector_3( n/2, 0, 0));
+                    K::Segment_3 segY(C - K::Vector_3(0,  n/2, 0), C + K::Vector_3(0,  n/2, 0));
+                    K::Segment_3 segZ(C - K::Vector_3(0, 0,  n/2), C + K::Vector_3(0, 0,  n/2));
 
-                    // The 8 corners of this voxel
-                    double x0 = origin_x + vx * n,       x1 = x0 + n;
-                    double y0 = origin_y + vy * n,       y1 = y0 + n;
-                    double z0 = origin_z + vz * n,       z1 = z0 + n;
-
-                    CGAL::Bbox_3 bbox(x0, y0, z0, x1, y1, z1);
-
-                    if (CGAL::do_intersect(bbox, tri)) {
+                    if (CGAL::do_intersect(tri, segX) ||
+                        CGAL::do_intersect(tri, segY) ||
+                        CGAL::do_intersect(tri, segZ)
+                        )
+                    {
                         grid(vx, vy, vz) = 1;
                     }
                 }
@@ -504,6 +598,17 @@ int main() {
     ExtractedBoundaries boundaries = extract_boundaries(mesh);
 
     std::cout << "Exterior mesh: " << boundaries.exterior.num_vertices() << " vertices\n";
-    for (const SurfaceMesh& m : boundaries.interiors)
-        std::cout << "Interior mesh: " << m.num_vertices() << " vertices\n";
+    // for (const SurfaceMesh& m : boundaries.interiors)
+    //     std::cout << "Interior mesh: " << m.num_vertices() << " vertices\n";
+    //
+    // CGAL::IO::write_polygon_mesh("../../outputs/6.off", mesh);
+
+    SurfaceMesh voxels = voxelsToSurfaceMesh(grid);
+
+    if (!CGAL::IO::write_OFF("../../outputs/6_voxels.off", voxels)) {
+        std::cerr << "CGAL write_OFF failed.\n"; return 1;
+    }
+
+    std::cout << "Mesh written to file";
+    return 0;
 }
