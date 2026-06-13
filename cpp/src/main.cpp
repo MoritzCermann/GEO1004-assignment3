@@ -25,6 +25,10 @@
 
 #include <CGAL/Isosurfacing_3/marching_cubes_3.h>
 #include <CGAL/Isosurfacing_3/Marching_cubes_domain_3.h>
+#include "json.hpp" // nlohmann::json
+
+using json = nlohmann::json;
+
 
 using Kernel      = CGAL::Simple_cartesian<double>;
 using FT          = Kernel::FT;
@@ -44,6 +48,10 @@ typedef double FT;
 typedef CGAL::Simple_cartesian<FT> K;
 typedef K::Point_3 Point_3;
 typedef K::Triangle_3 Triangle;
+
+const unsigned int SOLID_PART_ID = 1;
+const unsigned int EXTERIOR_ID = 2;
+const unsigned int FIRST_ROOM_ID = 3;
 
 
 struct Shell {
@@ -308,6 +316,132 @@ ExtractedBoundaries extract_boundaries(SurfaceMesh& mesh)
     return result;
 }
 
+
+// Used to convert a SurfaceMesh into the MultiSurface CityJSON boundaries.
+// The offset here describes the first index of this meshs vertices in the global list of all vertices
+json mesh_to_boundaries(const SurfaceMesh& mesh, std::size_t offset)
+{
+    json boundaries = json::array();
+
+    for (auto f : mesh.faces()) {
+        json ring = json::array();
+
+        // walk the halfedges around the face to collect vertex indices in order
+        auto h = mesh.halfedge(f);
+        auto h_start = h;
+        do {
+            ring.push_back(mesh.source(h).idx() + offset);
+            h = mesh.next(h);
+        } while (h != h_start);
+
+        // CityJSON surface = [ ring ]  (outer ring only, no holes)
+        boundaries.push_back({ ring });
+    }
+
+    return boundaries;
+}
+
+void write_cityjson(
+    const SurfaceMesh& exterior,
+    const std::vector<SurfaceMesh>& rooms,
+    const std::string& filename)
+{
+    std::vector<Point3> all_pts;
+
+    // get exterior vertices
+    for (auto v : exterior.vertices())
+        all_pts.push_back(exterior.point(v));
+
+    // remember where each rooms vertices start in the global list
+    std::vector<std::size_t> room_offset;  // so: room0 starts at v=195, room1 at v= 546...
+    for (const SurfaceMesh& room : rooms) {
+        room_offset.push_back(all_pts.size());
+        for (auto v : room.vertices())
+            all_pts.push_back(room.point(v));  // then add the vertices to all_pts
+    }
+
+    // CityJSON stores vertices as integers, so we extract scale and translate (bbox minimum)
+    // The real coordinate would then be: integet * scale + translate
+    double min_x = all_pts[0].x(), min_y = all_pts[0].y(), min_z = all_pts[0].z();
+    for (const auto& p : all_pts) {
+        min_x = std::min(min_x, p.x());
+        min_y = std::min(min_y, p.y());
+        min_z = std::min(min_z, p.z());
+    }
+    const double scale = 0.001;
+
+    json j;
+    j["type"] = "CityJSON";
+    j["version"] = "2.0";
+    j["transform"]["scale"] = { scale, scale, scale };
+    j["transform"]["translate"] = { min_x, min_y, min_z };
+    j["CityObjects"] = json::object();
+
+    // safe the vertices as long long as the values can get very large
+    j["vertices"] = json::array();
+    for (const auto& p : all_pts) {
+        long long ix = (long long)std::round((p.x() - min_x) / scale);
+        long long iy = (long long)std::round((p.y() - min_y) / scale);
+        long long iz = (long long)std::round((p.z() - min_z) / scale);
+        j["vertices"].push_back({ ix, iy, iz });
+    }
+
+    json building;
+    building["type"] = "Building";
+    building["attributes"] = json::object();
+
+    // rooms are children of Building
+    if (!rooms.empty()) {
+        json children = json::array();
+        for (std::size_t i = 0; i < rooms.size(); ++i)
+            children.push_back("Room_" + std::to_string(i));
+        building["children"] = children;
+    }
+
+    building["geometry"] = json::array();
+    if (exterior.num_faces() > 0) {
+        json geom;
+        geom["type"] = "MultiSurface";
+        geom["lod"] = "1";
+        geom["boundaries"] = mesh_to_boundaries(exterior, 0);
+        building["geometry"].push_back(geom);
+    }
+
+    j["CityObjects"]["Building"] = building;
+
+    // BuildingRoom objects
+    for (std::size_t i = 0; i < rooms.size(); ++i) {
+        std::string id = "Room_" + std::to_string(i);
+
+        json room_obj;
+        room_obj["type"] = "BuildingRoom";
+        room_obj["parents"] = { "Building" };
+        room_obj["attributes"] = json::object();
+        room_obj["geometry"] = json::array();
+
+        if (rooms[i].num_faces() > 0) {
+            json geom;
+            geom["type"] = "MultiSurface";
+            geom["lod"] = "1";
+            geom["boundaries"] = mesh_to_boundaries(rooms[i], room_offset[i]);
+            room_obj["geometry"].push_back(geom);
+        }
+
+        j["CityObjects"][id] = room_obj;
+    }
+
+    // write to file
+    std::ofstream out(filename);
+    if (!out.is_open()) {
+        std::cerr << "Error: cannot write " << filename << std::endl;
+        return;
+    }
+    out << j.dump(2) << std::endl;
+    out.close();
+    std::cout << "Written to: " << filename << std::endl;
+}
+
+
 int main() {
     std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
 
@@ -391,7 +525,7 @@ int main() {
     std::cout << "Stored faces:    " << total_faces << std::endl;
     std::cout << "Stored objects:  " << objects.size() << std::endl;
 
-
+    // -- SET UP VOXEL GRID --
     // bounding box extremes
     CGAL::Bbox_3 bbox = CGAL::bbox_3(vertices.begin(), vertices.end());
     double min_x = bbox.xmin();
@@ -444,6 +578,7 @@ int main() {
 
     int num_tris = triangles.size();
 
+    // -- VOXELISATION --
     // voxelise surfaces
     // loops through all triangles
     for (int t = 0; t < num_tris; ++t) {
@@ -478,7 +613,7 @@ int main() {
                     CGAL::Bbox_3 bbox(x0, y0, z0, x1, y1, z1);
 
                     if (CGAL::do_intersect(bbox, tri)) {
-                        grid(vx, vy, vz) = 1;
+                        grid(vx, vy, vz) = SOLID_PART_ID;  // 1
                     }
                 }
             }
@@ -489,6 +624,12 @@ int main() {
 
     std::cout << mesh.num_vertices() << " vertices, "
               << mesh.num_faces()    << " faces\n";
+
+    // first fill exterior with ID 2
+    flood_fill_exterior(grid, EXTERIOR_ID);
+    // then fill rooms one by one starting with ID 3
+    unsigned int num_rooms = flood_fill_interior(grid, FIRST_ROOM_ID);
+    std::cout << "Rooms found: " << num_rooms << "\n";
 
     // CGAL::IO::write_polygon_mesh("output.off", mesh);
 
@@ -504,6 +645,10 @@ int main() {
     ExtractedBoundaries boundaries = extract_boundaries(mesh);
 
     std::cout << "Exterior mesh: " << boundaries.exterior.num_vertices() << " vertices\n";
-    for (const SurfaceMesh& m : boundaries.interiors)
+    for (const SurfaceMesh& m : boundaries.interiors) {
         std::cout << "Interior mesh: " << m.num_vertices() << " vertices\n";
+
+    }
+
+    write_cityjson(boundaries.exterior, boundaries.interiors, "../../data/mybuilding.city.json");
 }
