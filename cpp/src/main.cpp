@@ -16,6 +16,7 @@
 #include <CGAL/Polygon_mesh_processing/connected_components.h>
 #include <CGAL/Polygon_mesh_processing/border.h>
 #include <CGAL/Polygon_mesh_processing/repair.h>
+#include <CGAL/Polygon_mesh_processing/orientation.h>
 
 #include <CGAL/Isosurfacing_3/Cartesian_grid_3.h>
 #include <CGAL/Isosurfacing_3/Value_function_3.h>
@@ -134,7 +135,8 @@ void flood_fill_exterior(VoxelGrid& grid, unsigned int outside_id) {
 
 SurfaceMesh voxelsToMesh(
     const VoxelGrid& vg,
-    double voxel_size = 1.0)
+    double voxel_size = 1.0,
+    double isovalue = 0.5)   // <-- new parameter
 {
     const int nx = (int)vg.max_x;
     const int ny = (int)vg.max_y;
@@ -175,7 +177,7 @@ SurfaceMesh voxelsToMesh(
             double wz = (dk == 0) ? 1.0-tz : tz;
             v += wx * wy * wz * vg(ci, cj, ck);
         }
-        return FT(1.0 - v);
+        return FT(v);
     };
 
     // // -- Gradient: central finite differences of the value function ----------
@@ -200,7 +202,7 @@ SurfaceMesh voxelsToMesh(
     std::vector<Point3>                  points;
     std::vector<std::vector<std::size_t>> faces;
 
-    IS::marching_cubes<CGAL::Parallel_if_available_tag>(domain, FT(0.5), points, faces);
+    IS::marching_cubes<CGAL::Parallel_if_available_tag>(domain, FT(isovalue), points, faces);
 
     // -- Convert polygon soup to Surface_mesh --------------------------------
     SurfaceMesh mesh;
@@ -208,6 +210,9 @@ SurfaceMesh voxelsToMesh(
         std::cerr << "Warning: output soup is not a 2-manifold surface.\n";
     else
         PMP::polygon_soup_to_polygon_mesh(points, faces, mesh);
+
+    if (isovalue == 0.5 && PMP::is_outward_oriented(mesh))
+        PMP::reverse_face_orientations(mesh);
 
     return mesh;
 }
@@ -579,35 +584,23 @@ int main() {
         }
     }
 
-    SurfaceMesh mesh = voxelsToMesh(grid, n);
+    flood_fill_exterior(grid, 2);
 
-    std::cout << mesh.num_vertices() << " vertices, "
-              << mesh.num_faces()    << " faces\n";
+    SurfaceMesh mesh_int = voxelsToMesh(grid, n, 0.5);
+    SurfaceMesh mesh_ext = voxelsToMesh(grid, n, 1.5);
 
-    // CGAL::IO::write_polygon_mesh("output.off", mesh);
+    std::cout << mesh_int.num_vertices() << " vertices, "
+              << mesh_int.num_faces()    << " faces\n";
 
-    // SurfaceMesh::Property_map<SurfaceMesh::face_index, std::size_t> fccmap =
-    //  mesh.add_property_map<SurfaceMesh::face_index, std::size_t>("f:CC").first;
-    //
-    // std::size_t num_components = PMP::connected_components(mesh, fccmap);
-    //
-    // std::cout << "Number of components: " << num_components << "\n";
-    //
-    // return 0;
+    SurfaceMesh merged;
 
-    ExtractedBoundaries boundaries = extract_boundaries(mesh);
+    // copy mesh1
+    CGAL::copy_face_graph(mesh_int, merged);
 
-    std::cout << "Exterior mesh: " << boundaries.exterior.num_vertices() << " vertices\n";
-    // for (const SurfaceMesh& m : boundaries.interiors)
-    //     std::cout << "Interior mesh: " << m.num_vertices() << " vertices\n";
-    //
-    // CGAL::IO::write_polygon_mesh("../../outputs/6.off", mesh);
+    // copy mesh2 into merged
+    CGAL::copy_face_graph(mesh_ext, merged);
 
-    SurfaceMesh voxels = voxelsToSurfaceMesh(grid);
-
-    if (!CGAL::IO::write_OFF("../../outputs/6_voxels.off", voxels)) {
-        std::cerr << "CGAL write_OFF failed.\n"; return 1;
-    }
+    CGAL::IO::write_OFF("../../outputs/merged.off", merged);
 
     std::cout << "Mesh written to file";
     return 0;
