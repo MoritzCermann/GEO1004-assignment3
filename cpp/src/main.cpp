@@ -262,24 +262,27 @@ unsigned int flood_fill_interior(VoxelGrid& grid, unsigned int first_id) {
     return current_id - first_id; // number of regions found
 }
 
-std::vector<SurfaceMesh> extract_interior(const SurfaceMesh& mesh)
-{
-    SurfaceMesh mesh_copy = mesh;  // work on the copy
-    SurfaceMesh::Property_map<SurfaceMesh::Face_index, std::size_t> fccmap =
-        mesh_copy.add_property_map<SurfaceMesh::Face_index, std::size_t>("f:CC").first;
+struct ExtractedBoundaries {
+    SurfaceMesh exterior;
+    std::vector<SurfaceMesh> interiors;
+};
 
-    std::size_t num_components = PMP::connected_components(mesh_copy, fccmap);
+ExtractedBoundaries extract_boundaries(SurfaceMesh& mesh)
+{
+    ExtractedBoundaries result;
+
+    SurfaceMesh::Property_map<SurfaceMesh::Face_index, std::size_t> fccmap =
+        mesh.add_property_map<SurfaceMesh::Face_index, std::size_t>("f:CC").first;
+
+    std::size_t num_components = PMP::connected_components(mesh, fccmap);
     std::cout << "Connected components: " << num_components << "\n";
 
-    // 2. Split into per-component meshes
     std::vector<SurfaceMesh> components(num_components);
-    // ... use PMP::split_connected_components or manual face copying
+    PMP::split_connected_components(mesh, components);
 
-    PMP::split_connected_components(mesh, components);  // CGAL >= 5.6
+    if (components.empty()) return result;
 
-    if (components.size() <= 1) return {};
-
-    // 3. Find the outermost component by largest bounding box volume
+    // Find the outermost component by largest bounding box volume
     auto bbox_volume = [](const SurfaceMesh& m) {
         CGAL::Bbox_3 bb;
         for (auto v : m.vertices()) bb += m.point(v).bbox();
@@ -293,12 +296,15 @@ std::vector<SurfaceMesh> extract_interior(const SurfaceMesh& mesh)
         if (vol > max_vol) { max_vol = vol; outer_idx = i; }
     }
 
-    // 4. Return all components except the outer one
-    std::vector<SurfaceMesh> result;
+    // Split into exterior and interiors
     for (std::size_t i = 0; i < components.size(); ++i) {
-        if (i != outer_idx)
-            result.push_back(std::move(components[i]));
+        if (components[i].num_vertices() == 0) continue;
+        if (i == outer_idx)
+            result.exterior = std::move(components[i]);
+        else
+            result.interiors.push_back(std::move(components[i]));
     }
+
     return result;
 }
 
@@ -495,10 +501,9 @@ int main() {
     //
     // return 0;
 
-    std::vector<SurfaceMesh> interiors = extract_interior(mesh);
+    ExtractedBoundaries boundaries = extract_boundaries(mesh);
 
-    for (const SurfaceMesh& m : interiors)
-        std::cout << "Boundary mesh with " << m.num_vertices() << " vertices\n";
-
-    return 0;
+    std::cout << "Exterior mesh: " << boundaries.exterior.num_vertices() << " vertices\n";
+    for (const SurfaceMesh& m : boundaries.interiors)
+        std::cout << "Interior mesh: " << m.num_vertices() << " vertices\n";
 }
