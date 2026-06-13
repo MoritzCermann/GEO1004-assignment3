@@ -13,6 +13,9 @@
 
 #include <CGAL/Polygon_mesh_processing/polygon_soup_to_polygon_mesh.h>
 #include <CGAL/IO/polygon_mesh_io.h>
+#include <CGAL/Polygon_mesh_processing/connected_components.h>
+#include <CGAL/Polygon_mesh_processing/border.h>
+#include <CGAL/Polygon_mesh_processing/repair.h>
 
 #include <CGAL/Isosurfacing_3/Cartesian_grid_3.h>
 #include <CGAL/Isosurfacing_3/Value_function_3.h>
@@ -259,6 +262,46 @@ unsigned int flood_fill_interior(VoxelGrid& grid, unsigned int first_id) {
     return current_id - first_id; // number of regions found
 }
 
+std::vector<SurfaceMesh> extract_interior(const SurfaceMesh& mesh)
+{
+    SurfaceMesh mesh_copy = mesh;  // work on the copy
+    SurfaceMesh::Property_map<SurfaceMesh::Face_index, std::size_t> fccmap =
+        mesh_copy.add_property_map<SurfaceMesh::Face_index, std::size_t>("f:CC").first;
+
+    std::size_t num_components = PMP::connected_components(mesh_copy, fccmap);
+    std::cout << "Connected components: " << num_components << "\n";
+
+    // 2. Split into per-component meshes
+    std::vector<SurfaceMesh> components(num_components);
+    // ... use PMP::split_connected_components or manual face copying
+
+    PMP::split_connected_components(mesh, components);  // CGAL >= 5.6
+
+    if (components.size() <= 1) return {};
+
+    // 3. Find the outermost component by largest bounding box volume
+    auto bbox_volume = [](const SurfaceMesh& m) {
+        CGAL::Bbox_3 bb;
+        for (auto v : m.vertices()) bb += m.point(v).bbox();
+        return (bb.xmax()-bb.xmin()) * (bb.ymax()-bb.ymin()) * (bb.zmax()-bb.zmin());
+    };
+
+    std::size_t outer_idx = 0;
+    double max_vol = 0;
+    for (std::size_t i = 0; i < components.size(); ++i) {
+        double vol = bbox_volume(components[i]);
+        if (vol > max_vol) { max_vol = vol; outer_idx = i; }
+    }
+
+    // 4. Return all components except the outer one
+    std::vector<SurfaceMesh> result;
+    for (std::size_t i = 0; i < components.size(); ++i) {
+        if (i != outer_idx)
+            result.push_back(std::move(components[i]));
+    }
+    return result;
+}
+
 int main() {
     std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
 
@@ -441,7 +484,21 @@ int main() {
     std::cout << mesh.num_vertices() << " vertices, "
               << mesh.num_faces()    << " faces\n";
 
-    CGAL::IO::write_polygon_mesh("output.off", mesh);
+    // CGAL::IO::write_polygon_mesh("output.off", mesh);
+
+    // SurfaceMesh::Property_map<SurfaceMesh::face_index, std::size_t> fccmap =
+    //  mesh.add_property_map<SurfaceMesh::face_index, std::size_t>("f:CC").first;
+    //
+    // std::size_t num_components = PMP::connected_components(mesh, fccmap);
+    //
+    // std::cout << "Number of components: " << num_components << "\n";
+    //
+    // return 0;
+
+    std::vector<SurfaceMesh> interiors = extract_interior(mesh);
+
+    for (const SurfaceMesh& m : interiors)
+        std::cout << "Boundary mesh with " << m.num_vertices() << " vertices\n";
 
     return 0;
 }
