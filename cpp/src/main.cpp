@@ -98,7 +98,7 @@ Point_3 voxel_to_world(
 
 std::map<std::string, Object> objects;
 
-const std::string input_file = "../../data/IfcOpenHouse_IFC2x3_simplified.obj";
+const std::string input_file = "../../data/Wellness-centre-simplified.obj";
 
 // Flood fill from all boundary voxels outward — marks exterior as OUTSIDE_ID (2).
 void flood_fill_exterior(VoxelGrid& grid, unsigned int outside_id) {
@@ -397,6 +397,29 @@ SurfaceMesh voxelsToSurfaceMesh(const VoxelGrid& grid)
     return mesh;
 }
 
+SurfaceMesh triangles_to_surface_mesh(const std::vector<Kernel::Triangle_3>& triangles) {
+    SurfaceMesh mesh;
+    std::map<std::tuple<double,double,double>, SurfaceMesh::Vertex_index> vertex_map;
+
+    auto get_or_add = [&](const Point_3& p) -> SurfaceMesh::Vertex_index {
+        auto key = std::make_tuple(p.x(), p.y(), p.z());
+        auto it = vertex_map.find(key);
+        if (it != vertex_map.end()) return it->second;
+        SurfaceMesh::Vertex_index v = mesh.add_vertex(p);
+        vertex_map[key] = v;
+        return v;
+    };
+
+    for (const auto& tri : triangles) {
+        SurfaceMesh::Vertex_index v0 = get_or_add(tri.vertex(0));
+        SurfaceMesh::Vertex_index v1 = get_or_add(tri.vertex(1));
+        SurfaceMesh::Vertex_index v2 = get_or_add(tri.vertex(2));
+        mesh.add_face(v0, v1, v2);
+    }
+
+    return mesh;
+}
+
 int main() {
     std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
 
@@ -605,7 +628,15 @@ int main() {
 
     SurfaceMesh voxels = voxelsToSurfaceMesh(grid);
 
-    if (!CGAL::IO::write_OFF("../../outputs/6_voxels.off", voxels)) {
+    SurfaceMesh triangle_mesh = triangles_to_surface_mesh(triangles);
+
+    if (!CGAL::IO::write_OFF("../../outputs/welness-voxels.off", voxels)) {
+        std::cerr << "CGAL write_OFF failed.\n"; return 1;
+    }
+
+    std::cout << "Mesh written to file";
+
+    if (!CGAL::IO::write_OFF("../../outputs/welness-triangles.off", triangle_mesh)) {
         std::cerr << "CGAL write_OFF failed.\n"; return 1;
     }
 
