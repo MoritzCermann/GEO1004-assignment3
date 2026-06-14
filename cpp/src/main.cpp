@@ -107,7 +107,7 @@ Point_3 voxel_to_world(
 std::map<std::string, Object> objects;
 
 //const std::string input_file = "../../data/IfcOpenHouse_IFC2x3_simplified.obj";
-const std::string input_file = "../../data/2022020320211122Wellness center Sama.ifc";
+const std::string input_file = "../../data/WellnessCenterSama_simplified.obj";
 
 // Flood fill from all boundary voxels outward — marks exterior as OUTSIDE_ID (2).
 void flood_fill_exterior(VoxelGrid& grid, unsigned int outside_id) {
@@ -143,7 +143,7 @@ void flood_fill_exterior(VoxelGrid& grid, unsigned int outside_id) {
 
 SurfaceMesh voxelsToMesh(
     const VoxelGrid& vg,
-    double voxel_size = 1.0)
+    double voxel_size = 0.35)
 {
     const int nx = (int)vg.max_x;
     const int ny = (int)vg.max_y;
@@ -317,6 +317,103 @@ ExtractedBoundaries extract_boundaries(SurfaceMesh& mesh)
     return result;
 }
 
+// Extract the outer envelope and per-room surfaces directly from the
+// flood-filled voxel grid. For every SOLID (ID = 1) voxel, each of its 6 faces is
+// emitted into the mesh of whichever region (exterior or room) lies on
+// the other side of that face.
+ExtractedBoundaries extract_surfaces(
+    const VoxelGrid& grid,
+    double voxel_size,
+    double origin_x, double origin_y, double origin_z,
+    unsigned int num_rooms)
+{
+    ExtractedBoundaries result;
+    result.interiors.resize(num_rooms);
+
+    // one vertex-dedup map per output mesh, keyed by grid-corner index
+    std::map<std::tuple<int,int,int>, SurfaceMesh::Vertex_index> ext_vmap;
+    std::vector<std::map<std::tuple<int,int,int>, SurfaceMesh::Vertex_index>> room_vmaps(num_rooms);
+
+    auto get_or_add_vertex = [&](SurfaceMesh& mesh,
+                                  std::map<std::tuple<int,int,int>, SurfaceMesh::Vertex_index>& vmap,
+                                  int cx, int cy, int cz) -> SurfaceMesh::Vertex_index
+    {
+        auto key = std::make_tuple(cx, cy, cz);
+        auto it = vmap.find(key);
+        if (it != vmap.end()) return it->second;
+        Point_3 p = voxel_to_world(cx, cy, cz, origin_x, origin_y, origin_z, voxel_size);
+        auto vd = mesh.add_vertex(p);
+        vmap[key] = vd;
+        return vd;
+    };
+
+    // 4 corners of each of the 6 unit-cube faces, in CCW order such that
+    // the resulting normal points OUTWARD in direction d (i.e. into the
+    // neighboring voxel). Order: -X, +X, -Y, +Y, -Z, +Z
+    static const int face_corners[6][4][3] = {
+        {{0,0,0},{0,0,1},{0,1,1},{0,1,0}}, // -X
+        {{1,0,0},{1,1,0},{1,1,1},{1,0,1}}, // +X
+        {{0,0,0},{1,0,0},{1,0,1},{0,0,1}}, // -Y
+        {{0,1,0},{0,1,1},{1,1,1},{1,1,0}}, // +Y
+        {{0,0,0},{0,1,0},{1,1,0},{1,0,0}}, // -Z
+        {{0,0,1},{1,0,1},{1,1,1},{0,1,1}}, // +Z
+    };
+    static const int dir_offset[6][3] = {
+        {-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}
+    };
+
+    const int X = (int)grid.max_x;
+    const int Y = (int)grid.max_y;
+    const int Z = (int)grid.max_z;
+
+    for (int vx = 0; vx < X; ++vx)
+    for (int vy = 0; vy < Y; ++vy)
+    for (int vz = 0; vz < Z; ++vz)
+    {
+        if (grid(vx, vy, vz) != SOLID_PART_ID) continue;
+
+        for (int d = 0; d < 6; ++d) {
+            int nx = vx + dir_offset[d][0];
+            int ny = vy + dir_offset[d][1];
+            int nz = vz + dir_offset[d][2];
+
+            unsigned int neighbor_val;
+            if (nx < 0 || nx >= X || ny < 0 || ny >= Y || nz < 0 || nz >= Z)
+                neighbor_val = EXTERIOR_ID; // shouldn't happen given the padding, but be safe
+            else
+                neighbor_val = grid(nx, ny, nz);
+
+            if (neighbor_val == SOLID_PART_ID) continue; // shared wall between two solids, no surface here
+
+            SurfaceMesh* target = nullptr;
+            std::map<std::tuple<int,int,int>, SurfaceMesh::Vertex_index>* vmap = nullptr;
+
+            if (neighbor_val == EXTERIOR_ID) {
+                target = &result.exterior;
+                vmap   = &ext_vmap;
+            } else if (neighbor_val >= FIRST_ROOM_ID) {
+                unsigned int room_idx = neighbor_val - FIRST_ROOM_ID;
+                if (room_idx >= result.interiors.size()) continue; // safety
+                target = &result.interiors[room_idx];
+                vmap   = &room_vmaps[room_idx];
+            } else {
+                continue; // a 0 here would mean flood fill missed a voxel
+            }
+
+            SurfaceMesh::Vertex_index vidx[4];
+            for (int c = 0; c < 4; ++c) {
+                int cx = vx + face_corners[d][c][0];
+                int cy = vy + face_corners[d][c][1];
+                int cz = vz + face_corners[d][c][2];
+                vidx[c] = get_or_add_vertex(*target, *vmap, cx, cy, cz);
+            }
+            target->add_face(vidx[0], vidx[1], vidx[2], vidx[3]);
+        }
+    }
+
+    return result;
+}
+
 
 // Used to convert a SurfaceMesh into the MultiSurface CityJSON boundaries.
 // The offset here describes the first index of this meshs vertices in the global list of all vertices
@@ -442,6 +539,63 @@ void write_cityjson(
     std::cout << "Written to: " << filename << std::endl;
 }
 
+// -----------------------------------------------------------------------
+// Remove "pseudo-room" pockets that are only one voxel tall in Z
+// (e.g. thin gaps between a floor slab and the ceiling below it),
+// converting their voxels back to SOLID_PART_ID and renumbering the
+// remaining rooms 0..N-1.
+//
+// Call AFTER flood_fill_interior(), BEFORE extract_surfaces().
+// Returns the updated num_rooms.
+// -----------------------------------------------------------------------
+unsigned int remove_flat_rooms(VoxelGrid& grid, unsigned int num_rooms)
+{
+    struct BBox {
+        int min_z =  std::numeric_limits<int>::max();
+        int max_z =  std::numeric_limits<int>::min();
+    };
+
+    std::vector<BBox> bbox(num_rooms);
+
+    for (unsigned int x = 0; x < grid.max_x; ++x)
+    for (unsigned int y = 0; y < grid.max_y; ++y)
+    for (unsigned int z = 0; z < grid.max_z; ++z) {
+        unsigned int v = grid(x, y, z);
+        if (v < FIRST_ROOM_ID) continue;
+        auto& b = bbox[v - FIRST_ROOM_ID];
+        b.min_z = std::min(b.min_z, (int)z);
+        b.max_z = std::max(b.max_z, (int)z);
+    }
+
+    std::vector<bool> is_flat(num_rooms, false);
+    unsigned int n_flat = 0;
+    for (unsigned int i = 0; i < num_rooms; ++i) {
+        if (bbox[i].max_z - bbox[i].min_z + 1 == 1) {
+            is_flat[i] = true;
+            ++n_flat;
+        }
+    }
+
+    // build remap old_id -> new_id (0-based), -1 for removed (flat) rooms
+    std::vector<int> remap(num_rooms, -1);
+    unsigned int new_id = 0;
+    for (unsigned int i = 0; i < num_rooms; ++i)
+        if (!is_flat[i]) remap[i] = (int)(new_id++);
+
+    for (auto& v : grid.voxels) {
+        if (v < FIRST_ROOM_ID) continue;
+        unsigned int i = v - FIRST_ROOM_ID;
+        if (is_flat[i]) v = SOLID_PART_ID;
+        else            v = FIRST_ROOM_ID + (unsigned int)remap[i];
+    }
+
+    if (n_flat > 0)
+        std::cout << "Removed " << n_flat << " one-voxel-tall pseudo-room(s); "
+                  << new_id << " real room(s) remain.\n";
+
+    return new_id;
+}
+
 
 int main() {
     std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
@@ -535,6 +689,13 @@ int main() {
     std::cout << "Stored faces:    " << total_faces << std::endl;
     std::cout << "Stored objects:  " << objects.size() << std::endl;
 
+    for (auto& [id, obj] : objects) {
+        size_t tris = 0;
+        for (auto& sh : obj.shells) tris += sh.triangles.size();
+        std::cout << id << ": shells=" << obj.shells.size()
+                  << ", triangles=" << tris << "\n";
+    }
+
     // -- SET UP VOXEL GRID --
     // bounding box extremes
     CGAL::Bbox_3 bbox = CGAL::bbox_3(vertices.begin(), vertices.end());
@@ -546,7 +707,7 @@ int main() {
     double max_z = bbox.zmax();
 
     // rows, columns, height
-    double n = 0.5;
+    double n = 0.3;
     unsigned int rows_x = (unsigned int)std::ceil((max_x - min_x) / n) + 2;
     unsigned int rows_y = (unsigned int)std::ceil((max_y - min_y) / n) + 2;
     unsigned int rows_z = (unsigned int)std::ceil((max_z - min_z) / n) + 2;
@@ -615,7 +776,7 @@ int main() {
             for (int vy = min_vy; vy <= max_vy; ++vy) {
                 for (int vz = min_vz; vz <= max_vz; ++vz) {
 
-                    // The 8 corners of this voxel
+                    //The 8 corners of this voxel
                     double x0 = origin_x + vx * n,       x1 = x0 + n;
                     double y0 = origin_y + vy * n,       y1 = y0 + n;
                     double z0 = origin_z + vz * n,       z1 = z0 + n;
@@ -625,6 +786,22 @@ int main() {
                     if (CGAL::do_intersect(bbox, tri)) {
                         grid(vx, vy, vz) = SOLID_PART_ID;  // 1
                     }
+                    // Point_3 C(
+                    //     origin_x + (vx + 0.5) * n,
+                    //     origin_y + (vy + 0.5) * n,
+                    //     origin_z + (vz + 0.5) * n
+                    // );
+                    // K::Segment_3 segX(C - K::Vector_3( n/2, 0, 0), C + K::Vector_3( n/2, 0, 0));
+                    // K::Segment_3 segY(C - K::Vector_3(0,  n/2, 0), C + K::Vector_3(0,  n/2, 0));
+                    // K::Segment_3 segZ(C - K::Vector_3(0, 0,  n/2), C + K::Vector_3(0, 0,  n/2));
+                    //
+                    // if (CGAL::do_intersect(tri, segX) ||
+                    //     CGAL::do_intersect(tri, segY) ||
+                    //     CGAL::do_intersect(tri, segZ)
+                    //     )
+                    // {
+                    //     grid(vx, vy, vz) = SOLID_PART_ID;  // 1
+                    // }
                 }
             }
         }
@@ -639,6 +816,10 @@ int main() {
     flood_fill_exterior(grid, EXTERIOR_ID);
     // then fill rooms one by one starting with ID 3
     unsigned int num_rooms = flood_fill_interior(grid, FIRST_ROOM_ID);
+
+    // before extracting geometry we want to remove
+    num_rooms = remove_flat_rooms(grid, num_rooms);
+
     std::cout << "Rooms found: " << num_rooms << "\n";
 
     // CGAL::IO::write_polygon_mesh("output.off", mesh);
@@ -652,7 +833,8 @@ int main() {
     //
     // return 0;
 
-    ExtractedBoundaries boundaries = extract_boundaries(mesh);
+    ExtractedBoundaries boundaries = extract_surfaces(grid, n, origin_x, origin_y, origin_z, num_rooms);
+    //ExtractedBoundaries boundaries = extract_boundaries(mesh);
 
     std::cout << "Exterior mesh: " << boundaries.exterior.num_vertices() << " vertices\n";
     for (const SurfaceMesh& m : boundaries.interiors) {
