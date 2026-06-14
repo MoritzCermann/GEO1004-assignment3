@@ -868,7 +868,7 @@ int main() {
     unsigned int num_rooms = flood_fill_interior(grid, FIRST_ROOM_ID);
 
     // before extracting geometry we want to remove
-    //num_rooms = remove_flat_rooms(grid, num_rooms);
+    num_rooms = remove_flat_rooms(grid, num_rooms);
 
     std::cout << "Rooms found: " << num_rooms << "\n";
 
