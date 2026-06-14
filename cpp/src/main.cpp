@@ -416,7 +416,7 @@ ExtractedBoundaries extract_surfaces(
 
 
 // Used to convert a SurfaceMesh into the MultiSurface CityJSON boundaries.
-// The offset here describes the first index of this meshs vertices in the global list of all vertices
+// The offset here describes the first index of this mesh's vertices in the global list of all vertices
 json mesh_to_boundaries(const SurfaceMesh& mesh, std::size_t offset)
 {
     json boundaries = json::array();
@@ -442,6 +442,8 @@ json mesh_to_boundaries(const SurfaceMesh& mesh, std::size_t offset)
 void write_cityjson(
     const SurfaceMesh& exterior,
     const std::vector<SurfaceMesh>& rooms,
+    const std::vector<int>& room_storeys,
+    int num_storeys,
     const std::string& filename)
 {
     std::vector<Point3> all_pts;
@@ -488,11 +490,16 @@ void write_cityjson(
     building["type"] = "Building";
     building["attributes"] = json::object();
 
-    // rooms are children of Building
-    if (!rooms.empty()) {
+    // BuildingStorey objects are children of Building; rooms are then
+    // grouped as children of the storey they belong to (see
+    // assign_room_storeys()). Collect each storey's room ids here, then
+    // emit the BuildingStorey CityObjects after the rooms below.
+    std::vector<json> storey_children(std::max(num_storeys, 0), json::array());
+
+    if (num_storeys > 0) {
         json children = json::array();
-        for (std::size_t i = 0; i < rooms.size(); ++i)
-            children.push_back("Room_" + std::to_string(i));
+        for (int s = 0; s < num_storeys; ++s)
+            children.push_back("Storey_" + std::to_string(s));
         building["children"] = children;
     }
 
@@ -511,9 +518,16 @@ void write_cityjson(
     for (std::size_t i = 0; i < rooms.size(); ++i) {
         std::string id = "Room_" + std::to_string(i);
 
+        // a room's parent is its BuildingStorey if one was assigned, else the Building itself
+        std::string parent_id = "Building";
+        if (i < room_storeys.size() && room_storeys[i] >= 0) {
+            parent_id = "Storey_" + std::to_string(room_storeys[i]);
+            storey_children[room_storeys[i]].push_back(id);
+        }
+
         json room_obj;
         room_obj["type"] = "BuildingRoom";
-        room_obj["parents"] = { "Building" };
+        room_obj["parents"] = { parent_id };
         room_obj["attributes"] = json::object();
         room_obj["geometry"] = json::array();
 
@@ -528,6 +542,19 @@ void write_cityjson(
         j["CityObjects"][id] = room_obj;
     }
 
+    // BuildingStorey objects, now that we know which rooms belong to each storey
+    for (int s = 0; s < num_storeys; ++s) {
+        json storey_obj;
+        storey_obj["type"] = "BuildingStorey";
+        storey_obj["parents"] = { "Building" };
+        storey_obj["attributes"] = json::object();
+        storey_obj["attributes"]["storeyNumber"] = s;
+        if (!storey_children[s].empty())
+            storey_obj["children"] = storey_children[s];
+
+        j["CityObjects"]["Storey_" + std::to_string(s)] = storey_obj;
+    }
+
     // write to file
     std::ofstream out(filename);
     if (!out.is_open()) {
@@ -539,15 +566,9 @@ void write_cityjson(
     std::cout << "Written to: " << filename << std::endl;
 }
 
-// -----------------------------------------------------------------------
-// Remove "pseudo-room" pockets that are only one voxel tall in Z
-// (e.g. thin gaps between a floor slab and the ceiling below it),
-// converting their voxels back to SOLID_PART_ID and renumbering the
-// remaining rooms 0..N-1.
-//
-// Call AFTER flood_fill_interior(), BEFORE extract_surfaces().
-// Returns the updated num_rooms.
-// -----------------------------------------------------------------------
+// Remove flat/pseudo rooms that are only a few voxel tall
+// these are usually floor slabs or the ceiling
+// we assign those voxels the SOLID_PART_ID and also have to readjust the room numbering
 unsigned int remove_flat_rooms(VoxelGrid& grid, unsigned int num_rooms)
 {
     struct BBox {
@@ -596,6 +617,40 @@ unsigned int remove_flat_rooms(VoxelGrid& grid, unsigned int num_rooms)
     return new_id;
 }
 
+std::vector<int> assign_room_storeys(const VoxelGrid& grid, unsigned int num_rooms)
+{
+    if (num_rooms == 0) return {};
+
+    const int STOREY_GAP = 2; // voxel layers parameter
+
+    // floor height (lowest z layer) of each room
+    std::vector<int> z_min(num_rooms, std::numeric_limits<int>::max());
+    for (unsigned int x = 0; x < grid.max_x; ++x)
+        for (unsigned int y = 0; y < grid.max_y; ++y)
+            for (unsigned int z = 0; z < grid.max_z; ++z) {
+                unsigned int v = grid(x, y, z);
+                if (v < FIRST_ROOM_ID) continue;
+                unsigned int r = v - FIRST_ROOM_ID;
+                z_min[r] = std::min(z_min[r], (int)z);
+            }
+
+    // sort rooms by floor height, then cut a new storey wherever the gap
+    // to the previous floor height is more than STOREY_GAP voxel layers
+    std::vector<unsigned int> order(num_rooms);
+    for (unsigned int i = 0; i < num_rooms; ++i) order[i] = i;
+    std::sort(order.begin(), order.end(),
+              [&](unsigned int a, unsigned int b) { return z_min[a] < z_min[b]; });
+
+    std::vector<int> room_storeys(num_rooms);
+    int storey = 0;
+    room_storeys[order[0]] = 0;
+    for (unsigned int k = 1; k < num_rooms; ++k) {
+        if (z_min[order[k]] - z_min[order[k - 1]] > STOREY_GAP) ++storey;
+        room_storeys[order[k]] = storey;
+    }
+
+    return room_storeys;
+}
 
 int main() {
     std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
@@ -707,7 +762,7 @@ int main() {
     double max_z = bbox.zmax();
 
     // rows, columns, height
-    double n = 0.3;
+    double n = 0.25;
     unsigned int rows_x = (unsigned int)std::ceil((max_x - min_x) / n) + 2;
     unsigned int rows_y = (unsigned int)std::ceil((max_y - min_y) / n) + 2;
     unsigned int rows_z = (unsigned int)std::ceil((max_z - min_z) / n) + 2;
@@ -807,40 +862,36 @@ int main() {
         }
     }
 
-    SurfaceMesh mesh = voxelsToMesh(grid, n);
-
-    std::cout << mesh.num_vertices() << " vertices, "
-              << mesh.num_faces()    << " faces\n";
-
     // first fill exterior with ID 2
     flood_fill_exterior(grid, EXTERIOR_ID);
     // then fill rooms one by one starting with ID 3
     unsigned int num_rooms = flood_fill_interior(grid, FIRST_ROOM_ID);
 
     // before extracting geometry we want to remove
-    num_rooms = remove_flat_rooms(grid, num_rooms);
+    //num_rooms = remove_flat_rooms(grid, num_rooms);
 
     std::cout << "Rooms found: " << num_rooms << "\n";
 
-    // CGAL::IO::write_polygon_mesh("output.off", mesh);
+    std::vector<int> room_storeys = assign_room_storeys(grid, num_rooms);
+    int num_storeys = 0;
+    for (int s : room_storeys) num_storeys = std::max(num_storeys, s + 1);
 
-    // SurfaceMesh::Property_map<SurfaceMesh::face_index, std::size_t> fccmap =
-    //  mesh.add_property_map<SurfaceMesh::face_index, std::size_t>("f:CC").first;
-    //
-    // std::size_t num_components = PMP::connected_components(mesh, fccmap);
-    //
-    // std::cout << "Number of components: " << num_components << "\n";
-    //
-    // return 0;
+    // INITIAL APPROACH: Extract rooms from Mesh
+    SurfaceMesh mesh = voxelsToMesh(grid, n);
 
-    ExtractedBoundaries boundaries = extract_surfaces(grid, n, origin_x, origin_y, origin_z, num_rooms);
+    std::cout << mesh.num_vertices() << " vertices, "
+              << mesh.num_faces()    << " faces\n";
     //ExtractedBoundaries boundaries = extract_boundaries(mesh);
+
+
+    // FINAL APPROACH: Here extract surfaces from labeled voxels
+    ExtractedBoundaries boundaries = extract_surfaces(grid, n, origin_x, origin_y, origin_z, num_rooms);
+
 
     std::cout << "Exterior mesh: " << boundaries.exterior.num_vertices() << " vertices\n";
     for (const SurfaceMesh& m : boundaries.interiors) {
         std::cout << "Interior mesh: " << m.num_vertices() << " vertices\n";
-
     }
 
-    write_cityjson(boundaries.exterior, boundaries.interiors, "../../data/mybuilding.city.json");
+    write_cityjson(boundaries.exterior, boundaries.interiors, room_storeys, num_storeys, "../../data/mybuilding.city.json");
 }
