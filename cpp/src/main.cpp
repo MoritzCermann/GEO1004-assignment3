@@ -220,56 +220,6 @@ SurfaceMesh voxelsToMesh(
     return mesh;
 }
 
-// For every voxel still at 0 (interior air not yet labelled), flood fill
-// its connected region with the next available ID (starting at first_id).
-// Returns the number of interior regions found.
-unsigned int flood_fill_interior(VoxelGrid& grid, unsigned int first_id) {
-    const unsigned int X = grid.max_x;
-    const unsigned int Y = grid.max_y;
-    const unsigned int Z = grid.max_z;
-
-    const int dx[] = {1,-1, 0, 0, 0, 0};
-    const int dy[] = {0, 0, 1,-1, 0, 0};
-    const int dz[] = {0, 0, 0, 0, 1,-1};
-
-    unsigned int current_id = first_id;
-
-    for (unsigned int x = 0; x < X; ++x) {
-        for (unsigned int y = 0; y < Y; ++y) {
-            for (unsigned int z = 0; z < Z; ++z) {
-                // Only start a new fill from an unlabelled interior voxel
-                if (grid(x, y, z) != 0) continue;
-
-                // BFS over this connected pocket
-                grid(x, y, z) = current_id;
-                std::queue<std::tuple<int,int,int>> q;
-                q.emplace(x, y, z);
-
-                while (!q.empty()) {
-                    auto [cx, cy, cz] = q.front();
-                    q.pop();
-                    for (int d = 0; d < 6; ++d) {
-                        int nx = cx + dx[d];
-                        int ny = cy + dy[d];
-                        int nz = cz + dz[d];
-                        if (nx < 0 || nx >= (int)X) continue;
-                        if (ny < 0 || ny >= (int)Y) continue;
-                        if (nz < 0 || nz >= (int)Z) continue;
-                        if (grid(nx, ny, nz) == 0) {
-                            grid(nx, ny, nz) = current_id;
-                            q.emplace(nx, ny, nz);
-                        }
-                    }
-                }
-
-                ++current_id;
-            }
-        }
-    }
-
-    return current_id - first_id; // number of regions found
-}
-
 struct ExtractedBoundaries {
     SurfaceMesh exterior;
     std::vector<SurfaceMesh> interiors;
@@ -626,10 +576,10 @@ int main() {
               << mesh.num_faces()    << " faces\n";
 
     // first fill exterior with ID 2
-    flood_fill_exterior(grid, EXTERIOR_ID);
+    // flood_fill_exterior(grid, EXTERIOR_ID);
     // then fill rooms one by one starting with ID 3
-    unsigned int num_rooms = flood_fill_interior(grid, FIRST_ROOM_ID);
-    std::cout << "Rooms found: " << num_rooms << "\n";
+    // unsigned int num_rooms = flood_fill_interior(grid, FIRST_ROOM_ID);
+    // std::cout << "Rooms found: " << num_rooms << "\n";
 
     // CGAL::IO::write_polygon_mesh("output.off", mesh);
 
@@ -647,7 +597,6 @@ int main() {
     std::cout << "Exterior mesh: " << boundaries.exterior.num_vertices() << " vertices\n";
     for (const SurfaceMesh& m : boundaries.interiors) {
         std::cout << "Interior mesh: " << m.num_vertices() << " vertices\n";
-
     }
 
     write_cityjson(boundaries.exterior, boundaries.interiors, "../../data/mybuilding.city.json");
