@@ -106,7 +106,8 @@ Point_3 voxel_to_world(
 
 std::map<std::string, Object> objects;
 
-const std::string input_file = "../../data/IfcOpenHouse_IFC2x3_simplified.obj";
+//const std::string input_file = "../../data/IfcOpenHouse_IFC2x3_simplified.obj";
+const std::string input_file = "../../data/2022020320211122Wellness center Sama.ifc";
 
 // Flood fill from all boundary voxels outward — marks exterior as OUTSIDE_ID (2).
 void flood_fill_exterior(VoxelGrid& grid, unsigned int outside_id) {
@@ -474,9 +475,18 @@ int main() {
 
         // Object group
         else if (tag == "g") {
-            ss >> current_object_id;
+            std::string rest;
+            std::getline(ss, rest);
+
+            size_t start = rest.find_first_not_of(" \t");
+            rest = (start == std::string::npos) ? "" : rest.substr(start);
+            size_t end = rest.find_last_not_of(" \t\r\n");
+            if (end != std::string::npos) rest = rest.substr(0, end + 1);
+
+            current_object_id = rest;
             objects[current_object_id] = Object();
             objects[current_object_id].id = current_object_id;
+            objects[current_object_id].shells.emplace_back();
         }
 
         // Shell
