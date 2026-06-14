@@ -11,7 +11,7 @@ set(${PROJECT_NAME}_VERSION_MINOR 0)
 include_directories( ${CMAKE_SOURCE_DIR}/include/ )
 
 # CGAL
-find_package( CGAL 5.5 QUIET COMPONENTS )
+find_package( CGAL QUIET COMPONENTS )
 if ( CGAL_FOUND )
   message(STATUS "CGAL found")
   message(STATUS ${CGAL_LIBRARIES})
