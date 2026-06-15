@@ -1,7 +1,7 @@
 cmake_minimum_required (VERSION 3.16)
 project (assignment3)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_BUILD_TYPE "Debug")
 
@@ -11,7 +11,7 @@ set(${PROJECT_NAME}_VERSION_MINOR 0)
 include_directories( ${CMAKE_SOURCE_DIR}/include/ )
 
 # CGAL
-find_package( CGAL QUIET COMPONENTS )
+find_package( CGAL 5.5 QUIET COMPONENTS )
 if ( CGAL_FOUND )
   message(STATUS "CGAL found")
   message(STATUS ${CGAL_LIBRARIES})
@@ -30,3 +30,8 @@ add_executable(assignment3 src/main.cpp
 target_compile_options(assignment3 PRIVATE -Wall)
 
 target_link_libraries(${PROJECT_NAME} CGAL::CGAL CGAL::Eigen3_support)
+
+if(TBB_FOUND)
+  target_link_libraries(${PROJECT_NAME} TBB::tbb)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE CGAL_LINKED_WITH_TBB)
+endif()
