@@ -237,6 +237,11 @@ This final approach leaves us with 54 rooms. The height filter removes about a t
 //  image("../img/wellness-nofilter-025-shell.png", width: 100%),
 //  caption: []
 //)
+// 
+// 
+=== Validation
+
+We validate the output with val3dity #footnote[http://geovalidation.bk.tudelft.nl/val3dity/] and CityJSON schema validator #footnote[https://validator.cityjson.org/]. Both validators show that the file is fully valid, but CityJSON validator indicates there are several duplicate vertices. 
 
 #figure(
   table(
