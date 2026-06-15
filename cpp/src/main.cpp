@@ -881,11 +881,11 @@ int main() {
 
     std::cout << mesh.num_vertices() << " vertices, "
               << mesh.num_faces()    << " faces\n";
-    ExtractedBoundaries boundaries = extract_boundaries(mesh);
+    //ExtractedBoundaries boundaries = extract_boundaries(mesh);
 
 
     // FINAL APPROACH: Here extract surfaces from labeled voxels
-    //ExtractedBoundaries boundaries = extract_surfaces(grid, n, origin_x, origin_y, origin_z, num_rooms);
+    ExtractedBoundaries boundaries = extract_surfaces(grid, n, origin_x, origin_y, origin_z, num_rooms);
 
 
     std::cout << "Exterior mesh: " << boundaries.exterior.num_vertices() << " vertices\n";
