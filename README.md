@@ -12,7 +12,7 @@ Artemi Kurski - 6195784
 
 # Dependencies
 
-- CGAL >= 5.5
+- CGAL >= 6.1
 - Eigen3
 - C++17
 
